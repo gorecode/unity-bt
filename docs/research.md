@@ -9,7 +9,12 @@ V2EX, vendor blogs) between 2026-11-11 and 2026-11-22. Links inline.
 ## 1. Target platform state
 
 - **Latest stable editor: Unity 6.6** (stream `6000.6.x`, e.g. `6000.6.9f1`, Nov 12 2026).
-  The `6000.0.x` stream is the 3-year LTS (bugfix-only backports).
+  Labeling: `6000.0.x` is the original 3-year LTS stream (bugfix-only); Unity 6.1…6.6
+  are "Supported" update streams (same stability/support as LTS until the next stream);
+  6.7 is expected to be the next **LTS** stream.
+  *(Checked 2026-11-18: docs.unity.com system-requirements pages for 6.0/6.6,
+  unityreleases.com, Unity Discussions "Unity 6.6 is now available" Sep 1 2026,
+  Unite Tokyo keynote recap Nov 17 2026.)*
 - **Unity 6.7 LTS** announced at Unite Tokyo (Nov 17 2026), expected December 2026 —
   2 years of support; adds Neural Texture Compression (experimental), customizable 2D
   graphics, Physics Core 2D authoring, 2D profiler.
@@ -54,7 +59,8 @@ Current version 1.0.17 (Nov 2 2026). Free, requires Unity 6+.
 
 ## 4. Agent ecosystem (Unity-side) — agent-driven development is first-class
 
-- **Unity CLI 1.0** (GA Nov 12–17 2026, announced at Unite Tokyo): terminal control of
+- **Unity CLI 1.0** (version 1.0.0 released Nov 12 2026; GA announced at Unite Tokyo
+  Nov 17 2026): terminal control of
   the editor. `unity command` / `unity eval` drive the Editor directly (faster, cheaper
   in tokens than MCP); `unity mcp` exposes the same capabilities over MCP for agents
   that can't run shell commands. Headless: installs editors, creates projects, runs
@@ -63,7 +69,8 @@ Current version 1.0.17 (Nov 2 2026). Free, requires Unity 6+.
   in favor of the CLI. Lesson learned by Unity: natural-language MCP loops burned tokens;
   precise CLI commands won. We build the agent loop on CLI from day one.
 - **Official Unity skills** for agents: `unity skill install opencode` / `unity setup
-  opencode` (CLI 1.0.0-beta.15/16) — Unity-authored skills installed into OpenCode.
+  opencode` (shipped during the CLI 1.0.0 beta series — beta.15 Oct 29, beta.16 Nov 3
+  2026 — and included in GA) — Unity-authored skills installed into OpenCode.
   Free, no Unity AI subscription needed for CLI/skills/MCP.
 
 ## 5. LLM orchestration research (who does what)
@@ -99,7 +106,7 @@ testimonials on r/Unity3D / r/aigamedev, LinkedIn Unity-dev review).
 | Role | Who |
 |---|---|
 | Runtime + architecture implementation | GLM-5.3 (or 5.3-Flash driving the CLI) |
-| Code review / second opinion | another frontier agent (Codex / Claude) |
+| Code review / second opinion | any capable frontier model with clean context (wired into AGENTS.md workflow) |
 | Screenshot triage ("does it look right") | GLM-5.3-Flash / 4.6V-Flash / `ui_diff_check` |
 | Geometry correctness | deterministic editor tests (`worldBound` etc.) |
 | Compile/test feedback | Unity CLI, after every change |
@@ -108,8 +115,11 @@ testimonials on r/Unity3D / r/aigamedev, LinkedIn Unity-dev review).
 ## 6. Prior art & landscape (detailed)
 
 - **NPBehave** (meniku, MIT): event-driven BT for Unity, explicitly UE-inspired node
-  types. Code-first, **no editor**, dormant since 2022. → candidate runtime donor (MIT
-  allows adoption); audit in R3.
+  types. Code-first, **no editor**, dormant: last release-era commit **2022-11-26**
+  (verified 2026-11-22 by cloning). License caveat: GitHub reports MIT, but **no
+  LICENSE file exists at repo HEAD** — provenance to confirm before adopting code.
+  → audit delivered: [npbehave-audit.md](npbehave-audit.md); decision = spec-led
+  reimplementation, NPBehave as conceptual reference.
 - **Unity Behavior**: see §2.
 - **GraphView hobby editors** (JamesLaFritz/GraphViewBehaviorTree,
   thekiwicoder0/UnityBehaviourTreeEditor, H-IAAC/BehaviorTrees, Brainiac…): naive tree
@@ -141,8 +151,8 @@ testimonials on r/Unity3D / r/aigamedev, LinkedIn Unity-dev review).
 **In scope (the product):**
 1. Event-driven scheduler (no per-frame full-tree traversal; reactive on blackboard
    changes), per-agent node instancing model.
-2. Composites: Selector, Sequence, **Simple Parallel** (with finish/finish-and-branch
-   memory modes).
+2. Composites: Selector, Sequence, **Simple Parallel** (finish modes Immediate /
+   Delayed — exact behavior confirmed in R2 spec).
 3. **Decorators as guards** on composites/tasks (not leaf nodes): condition
    decorators, cooldown, loop, force-success/failure, time-limit; **observer aborts**:
    None / Self / Lower Priority / Both, with correct abort search and re-entry
@@ -170,7 +180,7 @@ network-prediction AI.
    asset; **no shared-variable subsystem** (BD anti-pattern).
 4. Agent workflow = Unity CLI compile/test loop after every change + screenshot/vision
    review for UI + human gate. Rules codified in AGENTS.md.
-5. UE engine source may be read as behavioral specification; code/naming must be
-   clean-room (legal: RISK-02).
+5. UE engine source may be read as behavioral specification; implementation must be
+   spec-led and independent — no code/naming carryover (legal: RISK-02).
 6. Performance: zero-alloc tick path, pooled node instances and event queues;
    DOTS/Burst = optional isolated module only if Phase 5 numbers justify.

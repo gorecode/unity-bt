@@ -22,25 +22,41 @@ to Unity 6+:
 
 ## Why this project exists (landscape as of Nov 2026)
 
-| | UE semantics | Graph Toolkit editor | UE-grade debugger | Open source |
+| | UE semantics | Editor on Unity's supported graph stack³ | UE-grade debugger | Open source |
 |---|---|---|---|---|
 | Unity Behavior (official) | partial (own "behavior graph" hybrid) | ✅ | partial | source-available¹ |
-| NPBehave | ✅ | ❌ | ❌ | ✅ MIT, dormant since 2022 |
+| NPBehave | ✅ | ❌ (no editor at all) | ❌ | ✅ MIT⁴, dormant since 2022 |
 | GraphView hobby editors | ❌ naive trees | ❌ legacy UI | ❌ | ✅ |
 | Behavior Designer (Opsive, $) | partial | own UI | ✅ | ❌² |
+| NodeCanvas ($132) | partial (BT + HFSM + dialogue) | own UI | partial (live Play-mode editing) | ❌ commercial |
 | **unity-bt (this project)** | ✅ | ✅ | ✅ | ✅ MIT |
+
+³ "Editor on Unity's supported graph stack" = built on Graph Toolkit rather than a
+custom or frozen-legacy canvas. It is a **support-horizon proxy** (the stack Unity
+itself maintains and migrates), not a quality judgement of rivals' custom editors.
 
 ¹ Unity Companion License: read/learn, restricted redistribution.
 ² Community-reported: custom variable serialization fighting VCS and prefab variants,
 glitchy subtrees, full source sold separately, paid major-version treadmill.
-See [research notes §7](docs/research.md).
+See [research notes §6](docs/research.md).
+⁴ GitHub reports MIT, but no LICENSE file exists at repo HEAD (verified 2026-11-22) —
+provenance to confirm before any code adoption; see the
+[NPBehave audit](docs/npbehave-audit.md).
 
 ## Non-goals
 
 - **EQS** (Environment Query System) and **AI Perception** ports — permanently out of
   scope. Use existing Unity solutions alongside.
 - Cloning UE editor UX pixel-for-pixel.
-- Unity versions below 6.0 LTS.
+- Unity versions below **6.6 (6000.6)** — Graph Toolkit and native `Dictionary`
+  serialization are prerequisites.
+
+## Naming
+
+The repo name `unity-bt` is for discoverability. The **product name and UPM package
+id are a Phase-0 decision** (trademark-safe, nominative use — "… for Unity", never
+starting with "Unity"). See RISK-12 in the
+[risk register](docs/risks-and-prototypes.md).
 
 ## Documentation
 
@@ -49,12 +65,16 @@ See [research notes §7](docs/research.md).
 2. [Implementation plan](docs/implementation-plan.md) — phases, deliverables, gates.
 3. [Risk register & de-risking prototypes](docs/risks-and-prototypes.md) — every risk
    with a concrete, time-boxed prototype and pass/fail criteria.
+4. [UE5 BT formal specification (draft v0.9)](docs/ue-bt-spec.md) — the ~45 numbered,
+   testable execution-semantics statements, naming map, typed-key catalog.
+5. [NPBehave audit](docs/npbehave-audit.md) — donor analysis and the runtime decision.
 
 ## Ground rules (short version — details in AGENTS.md)
 
 1. **Zero allocations in the tick path.**
 2. **UE engine source is a spec, not a codebase.** Read it to understand semantics;
-   never copy names, structure, or code (UE EULA).
+   never copy names, structure, or code (UE EULA; same for Unity Behavior source under
+   the Companion License).
 3. **Native serialization only.**
 4. A change is not done until it **compiles in a real Unity editor and tests pass**
    (Unity CLI, from day one).

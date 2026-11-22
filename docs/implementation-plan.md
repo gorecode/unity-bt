@@ -1,145 +1,217 @@
-# Implementation Plan — draft v0.1 (Nov 2026)
+# Implementation Plan — draft v0.2 (Nov 2026, post-critic-review)
 
-"Fully finished product" = **UE5 behavior trees in Unity 6+, end to end**: faithful
+"Fully finished product" = **UE5 behavior trees in Unity, end to end**: faithful
 event-driven runtime, Graph Toolkit editor, UE-grade debugger, native serialization,
 docs, samples, CI, released as a UPM package — MIT.
 
-Cadence assumption: 1 human (review/gates) + agent workflow
-(GLM-5.3 implement + vision review + CLI compile loop), see
-[research §5](research.md). Estimates are for that topology and are deliberately rough.
+Cadence assumption: **1 human, ~10 h/week** (review/gates) + agent workflow
+(GLM-5.3 implement + vision review + CLI compile loop; roles in
+[research §5](research.md), wired in [AGENTS.md](../AGENTS.md)).
+Timeline carries a **+25% contingency buffer**; re-plan triggers are stated per phase.
+**Minimum Unity version: 6.6 (6000.6)** — Graph Toolkit 6.2+, native `Dictionary`
+serialization 6.6+, CI matrix starts at 6.6. The floor is encoded in the UPM package
+(`package.json` `unity` field) from Phase 1 and in the CI matrix.
 
 ---
 
-## Phase 0 — Preliminary research (2–3 weeks, partially parallel)
+## Phase 0 — Preliminary research (3–4 weeks, partially parallel)
 
-Five spikes, each producing a doc or a throwaway prototype under `spikes/`. **Gate: the
-go/no-go checklist at the end of this section.**
+Research items **R1–R8** and prototypes **P1–P8** cross-map one-to-one
+(see [risks-and-prototypes.md](risks-and-prototypes.md) mapping table). Each produces
+a doc or a throwaway prototype under `spikes/`.
 
-### R1 — Graph Toolkit spike
+### R1 — Graph Toolkit spike (↔ P1)
 Build a toy graph tool (10 node types, custom inspector fields, asset subgraph) on the
 experimental Graph Toolkit in Unity 6.6. Repeat on the 6.7 beta when available.
-Deliverable: `spikes/gt-spike/` + `docs/gt-notes.md` (API stability diff, gotchas,
+Deliverables: `spikes/gt-spike/`, `docs/gt-notes.md` (API stability diff, gotchas,
 serialization model, how Unity Behavior structures its model — patterns only, see
-RISK-02).
-**Exit:** toy editor usable; breaking-change surface between 6.6/6.7 documented.
+RISK-02/RISK-11), **`docs/licenses.md`** (license conclusions: Graph Toolkit package
+terms as a dependency of an MIT product; what the Unity Companion License permits for
+Unity Behavior source study).
+**Exit (measurable):** toy editor usable; breaking changes between 6.6/6.7 enumerated
+and confined to the adapter layer; `docs/licenses.md` merged with conclusions recorded.
 
-### R2 — UE5 BT formal specification
+### R2 — UE5 BT formal specification (↔ P2)
 Write `docs/ue-bt-spec.md`: complete execution semantics — scheduler, search/abort
-order (incl. Lower Priority search), observer abort modes, services timing, latent task
-continuation, Simple Parallel memory modes, blackboard observer firing rules, node
-instancing/memory. Source: UE docs + reading engine source **as behavior spec** +
-empirical probes in a UE 5.8 sandbox project where docs are ambiguous.
-Deliverable: spec with ~40 numbered, testable statements (each becomes a golden test in
-Phase 1/3).
-**Exit:** spec review passes; every statement is decidable by a test.
+order, observer abort modes, services timing, latent task continuation, Simple
+Parallel finish modes (Immediate/Delayed — confirm), blackboard observer firing rules,
+node instancing. Sources: UE 5.8 public docs + engine source **as behavior spec only**
+(RISK-02) + empirical probes in the R7 sandbox where docs are ambiguous.
 
-### R3 — NPBehave audit
-Map NPBehave's model onto the R2 spec: what fits (event-driven core), what's missing
-(Simple Parallel, guard-decorator placement, lower-priority aborts, services, node
-instancing), what's wrong (allocation patterns, API age). Decision fork: **adopt &
-adapt** vs **clean-room reimplementation informed by it**. MIT allows both.
-**Exit:** decision recorded in `docs/npbehave-audit.md`.
+**Acceptance definition (binding):**
+- Every statement uses the template: `ID | statement | confidence tag ([D]ocumented /
+  [K]nown-community / [V]erify-in-sandbox) | stimulus & expected trace sketch`.
+- Deliverables include the **naming mapping table** (our node/API names ↔ UE concepts)
+  and the **typed blackboard key catalog** (exact Unity types).
+- **Coverage rule:** every in-scope bullet of [research §7](research.md#7-ue5-bt-semantics--scope-inventory)
+  maps to ≥1 numbered statement (coverage table at spec end).
+- **Reviewers:** the human maintainer **and** a second frontier agent with clean
+  context, both sign off; disputes resolved against the R7 sandbox.
+- A statement is *decidable* iff a golden test can encode stimulus → expected trace.
 
-### R4 — Agent workflow harness
-Set up and validate the dev loop before writing product code:
-- Unity CLI installed; project wired for `unity command` compile + `unity` test runs;
+Current state: **draft v0.9 exists** (authored Nov 2026), pending review + [V]-item
+resolution in the sandbox.
+**Exit:** sign-offs recorded; all [V] items resolved or explicitly deferred with
+rationale.
+
+### R3 — NPBehave audit (no separate prototype; decision doc is the artifact)
+Map NPBehave's model onto the R2 spec; decide **adopt & adapt** vs **spec-led
+reimplementation informed by it**.
+Current state: **done** — see `docs/npbehave-audit.md` (decision: spec-led
+reimplementation; NPBehave dormant since commit 2022-11-26, verified).
+**Exit:** decision recorded and referenced by Phase 1.
+
+### R4 — Agent workflow harness (↔ P5)
+Set up and validate the dev loop before product code:
+- Unity CLI installed; project wired for `unity command` compile + test runs;
 - `unity skill install opencode` + this repo's AGENTS.md;
 - Vision MCP (`@z_ai/mcp-server`) configured; screenshot pipeline: editor script →
-  PNG to `Artifacts/screenshots/` → review by vision model; `ui_diff_check` before/after;
-- Deterministic layout test example (`worldBound` assertions) proven on the R1 toy.
-**Exit:** a full implement→compile→test→screenshot→review cycle executed end-to-end by
-the agents on a trivial change.
+  PNG to `Artifacts/screenshots/` (CI-style artifact storage, bounded retention —
+  **not committed**; `.gitignore` already excludes `Artifacts/`);
+- deterministic layout-test example (`worldBound` assertions) proven on the R1 toy;
+- second-agent reviewer wired (trigger point: every PR-sized change; budget: plan line
+  item).
+**Exit (measurable): 5 consecutive agent changes with zero human intervention beyond
+the final aesthetic gate**, each passing compile→test→screenshot→review.
 
-### R5 — Performance baselines
-Microbenchmarks on Unity 6.6 (Mono + IL2CPP): event-driven vs polled tree,
-1k/10k agents, allocation profiling. Baselines: NPBehave, Unity Behavior.
-Deliverable: `docs/perf-baseline.md` with numbers our runtime must beat.
-**Exit:** harness checked in; baseline numbers recorded.
+### R5 — Performance baselines (↔ P4)
+Microbenchmarks on Unity 6.6, **Mono for iteration + IL2CPP for enforcement**:
+event-driven vs polled tree, 1k/10k agents, allocation profiling. Baselines: NPBehave,
+Unity Behavior. Deliverable: `docs/perf-baseline.md`.
+**Canonical target set (used identically in Phase 1, Phase 5, DoD):**
+≥ 1.5× the agent count of the **better** baseline (NPBehave, Unity Behavior) within a
+16.6 ms frame budget, **and 0 B/tick steady-state allocation on IL2CPP**.
+**Exit:** harness checked in; harness proven to detect an injected 24 B/tick leak
+(that proof is P4); numbers recorded.
 
-### Phase 0 gate (go/no-go)
-- [ ] Graph Toolkit viable & churn acceptable (else: fallback decision — pin version / raw UI Toolkit)
-- [ ] Spec complete enough to write golden tests
-- [ ] Runtime donor decision made
-- [ ] Agent loop executes without human babysitting per change
-- [ ] Baseline numbers exist
+### R6 — CI skeleton (new; no game-code prototype, but standing on P4's harness)
+GitHub Actions: Linux headless leg (Unity CLI batch: compile + golden tests + alloc
+tests) + one **desktop** leg (Windows or Linux with display, for editor/UI layout
+tests). Resolve and document **Unity license activation on runners**
+(Personal vs Pro; activation-count limits; secrets handling; game-ci or first-party
+action — decided here, tested with a trivial green run). Artifact storage for
+screenshots/test output.
+**Exit:** both legs green on a trivial project; activation procedure documented in
+`docs/ci.md`; IL2CPP test leg decision recorded (enforced nightly or per-PR — with
+rationale).
 
-## Phase 1 — Runtime core, no editor (3–4 weeks)
+### R7 — UE 5.8 sandbox & trace-capture procedure (human-owned, ~2 days)
+Install UE **5.8 (pinned minor)**, minimal C++ project, author the ~15 canonical
+scenarios (same list as P3), capture execution traces (BT debugger history /
+`ai.debug` logging) in a repeatable way. Output: `docs/ue-sandbox-traces/` + capture
+procedure. **This is an input to R2 [V]-resolution and Phase 3 differential tests.**
+**Exit:** all 15 scenarios captured; procedure re-runnable by the maintainer.
+
+### R8 — Zero-alloc feasibility spike (↔ P8)
+Implement **one latent task + one observer abort** under AGENTS.md constraints
+(no iterator methods, no closures, no boxing; struct enumerators; pooled nodes/events)
+and prove 0 B/tick on IL2CPP with the P4 harness. Codify the permitted-construct list
+and the analyzer that enforces it.
+**Exit:** spike hits 0 B/tick; banned-construct analyzer config merged.
+
+### Phase 0 gate (go/no-go — all measurable)
+- [ ] P1: toy works on 6.6; ≤ 1 day of adapter-scope fixes to rebuild on 6.7 beta
+- [ ] R2: spec sign-offs (human + second agent) recorded; coverage table complete
+- [ ] R3: donor decision recorded (done)
+- [ ] R4/P5: 5 consecutive agent changes, zero human intervention beyond final gate
+- [ ] R5/P4: harness detects injected 24 B/tick leak; baselines recorded
+- [ ] R6: both CI legs green; Unity license activation procedure documented & tested
+- [ ] R7: 15 scenarios captured, procedure re-runnable
+- [ ] R8/P8: spike at 0 B/tick; analyzer merged
+- [ ] Naming/product-name decision (RISK-12) recorded — incl. UPM package id
+- [ ] If P1 fails: canvas fallback pre-estimate (+4–6 weeks, re-plan before Phase 2)
+
+## Phase 1 — Runtime core, no editor (3–4 weeks; depends on R2, R3, R4, R5, R6, R8)
 
 Scope: event-driven scheduler; Selector/Sequence; instant & latent tasks; blackboard
-with typed keys + observers; basic decorators (condition guard with Self abort);
-per-agent node instancing; **C# builder API** (trees authored in code — the editor is
-irrelevant at this phase).
-- Golden tests generated from R2 spec statements (target: all Phase-1-applicable
-  statements green); runs headless via Unity CLI in CI.
-- Zero-alloc rule enforced: allocation tests fail the build on GC allocs in steady-state
-  tick (10k ticks, 1k agents).
-**Exit:** test suite green on CI (Linux headless + one desktop runner), perf ≥ NPBehave.
+with typed keys (R2 catalog) + observers; condition decorators with Self abort;
+per-agent node instancing; **C# builder API**; **UPM package skeleton + asmdef split
+(runtime/editor/tests/spikes) from day one**; **debugger instrumentation points**
+(compile-time switched capture, zero-cost when off — Phase 4 depends on this);
+golden tests from R2 statements (all Phase-1-applicable [D]/[K] ones green);
+zero-alloc enforced by R8 analyzer + alloc tests in CI.
+**Exit (numeric):** CI green (R6 legs) incl. alloc tests on IL2CPP;
+perf ≥ NPBehave event-driven baseline (µs/agent·update and agents-per-16.6 ms-frame
+recorded vs R5 numbers); instrumentation detached-overhead test = 0 B/tick and no
+measurable tick-time delta.
 
-## Phase 2 — Authoring on Graph Toolkit (4–6 weeks)
+## Phase 2 — Authoring on Graph Toolkit (4–6 weeks; depends on R1 + Phase 1)
 
-Scope: graph asset model (native Unity serialization — subgraphs as assets); node UI for
-all Phase-1 node types; blackboard asset editor; inspector for task fields; drag/wire/
-undo/redo via Toolkit primitives; graph → runtime compile step (validation with
-actionable error nodes).
-- Serialization torture tests: git merge of concurrent edits, prefab variants, scene
-  references (this is the anti-BD proof point — RISK-06).
+Scope: graph asset model (native Unity serialization; subgraphs as assets);
+node UI for Phase-1 node types; blackboard asset editor; task-field inspector;
+graph → runtime compile step with actionable validation errors; **versioned graph
+schema from the first release** (forward-migration test: save on N, load on N+1 —
+RISK-01).
+- P6 torture tests run against a **minimal real Phase-2 asset model** (not the R1 toy).
 - Every editor change: screenshot + `ui_diff_check` + human gate (AGENTS.md).
-**Exit:** author + run a tree without touching code; serialization tests green.
+**Exit (scripted):** the "PatrolXPatrol" scripted authoring scenario — a non-author
+(the second agent or maintainer, documented steps only) builds and runs a two-guard
+patrol/investigate tree without touching code; serialization torture green; graph
+save-on-6.6 → load-on-6.7-beta green.
 
-## Phase 3 — UE-parity runtime semantics (3–4 weeks)
+## Phase 3 — UE-parity runtime semantics (3–4 weeks; depends on Phase 1; partially
+parallelizable with Phase 2 by agent capacity, not by dependency)
 
 Scope: full observer abort semantics (Self/LowerPriority/Both + abort search order),
-services (periodic + event), Simple Parallel (both memory modes), cooldown/loop/
+services (periodic + event), Simple Parallel (both finish modes), cooldown/loop/
 time-limit/force-result decorators, deferred & event-driven activation paths.
-- Golden tests for the full R2 spec; differential scenarios vs UE 5.8 sandbox where
-  feasible (same tree described in both, compare execution traces by hand once per
-  scenario class).
-**Exit:** full spec statement list green; trace comparison doc signed off.
+- Golden tests for the full R2 spec.
+- **Mandatory differential validation:** every scenario *class* from the R7 set is
+  compared against UE traces; **pass rule: trace equality modulo timing** (same node
+  activation/deactivation/result sequence; timestamps ignored). Results doc signed off
+  by the human maintainer against this written rubric.
+**Exit:** full spec statement list green; differential doc signed off per rubric.
 
-## Phase 4 — Debugger (4–6 weeks)
+## Phase 4 — Debugger (4–6 weeks; depends on Phases 2–3)
 
-Scope: Play-mode live visualization (running/aborted states on nodes), breakpoints that
-pause Play mode (per-node, per-decorator-condition), **execution history with replay**
-(inspired by UE history + the browser editor's replay timeline), abort-path tracing,
-time-travel inspection of blackboard values.
-- Debugger overhead must be zero when not attached (alloc tests with debugger on/off).
-**Exit:** demo scenario debugged end-to-end; overhead tests green.
+Scope: Play-mode live visualization; breakpoints pausing Play mode (per-node,
+per-decorator); execution history with replay (R7-style trace capture already
+instrumented in Phase 1); abort-path tracing; blackboard time-travel inspection.
+**Budgets:** detached = 0 B/tick and no measurable tick overhead (CI-enforced);
+attached = ≤ 10% tick-time overhead in the standard stress scene (recorded number).
+**Exit:** demo scenario debugged end-to-end (scripted checklist); both budgets met.
 
-## Phase 5 — Performance & scale (3–4 weeks, then optional track)
+## Phase 5 — Performance & scale (3–4 weeks; depends on Phases 3–4)
 
-Scope: profiler module (per-tree timings, abort counts, event counts); stress tests;
-optimization passes; decision point for the **optional DOTS/Burst module** (isolated
-asmdef/package, never a core dependency) gated on Phase-5 numbers.
-**Exit:** targets from R5 beaten with margin; go/no-go on DOTS track recorded.
+Scope: profiler module (per-tree timings, abort/event counts); stress tests;
+optimization; **go/no-go on the optional DOTS/Burst module** (isolated asmdef/package;
+core must compile and run with zero Entities references — AGENTS.md rule).
+**Exit (canonical target set, same as R5):** ≥ 1.5× better-baseline agent count within
+16.6 ms frame budget **and** 0 B/tick on IL2CPP; DOTS decision recorded with numbers.
 
-## Phase 6 — Productization (continuous from Phase 4)
+## Phase 6 — Productization (starts alongside Phase 4; continuous)
 
-Docs (manual + API), samples mirroring official UE BT examples, integration tasks
-(AI Navigation MoveTo etc.), UPM package layout + scoped registry / Git URL install,
-versioned releases + changelog, contribution guide, CI matrix (6.6 + 6.7 LTS when out,
-then 7 alphas).
+Docs (manual + API reference), samples mirroring official UE BT examples,
+integration tasks (AI Navigation MoveTo etc.), UPM release (scoped registry / Git URL /
+openUPM submission — channel decision with checklist, RISK-14), contribution guide,
+versioned releases + changelog, **pre-release IP review** (RISK-02).
 
-## Timeline summary (rough)
+## Timeline summary (single implementer: overlap is agent-parallel only)
 
-| Phase | Weeks | Depends on |
+| Phase | Weeks (+25% buffer included in totals) | Depends on |
 |---|---|---|
-| 0 research | 2–3 | — |
-| 1 runtime core | 3–4 | R2, R3, R5 |
-| 2 authoring | 4–6 | R1, Phase 1 |
-| 3 UE parity | 3–4 | Phase 1 |
-| 4 debugger | 4–6 | Phases 2–3 |
-| 5 performance | 3–4 | Phases 3–4 |
-| 6 productization | continuous | — |
+| 0 research | 3–4 | — |
+| 1 runtime core | 4–5 | R2 R3 R4 R5 R6 R8 |
+| 2 authoring | 5–7 | R1, Phase 1 |
+| 3 UE parity | 4–5 | Phase 1 (agent-parallel with Phase 2) |
+| 4 debugger | 5–7 | Phases 2–3 |
+| 5 performance | 4–5 | Phases 3–4 |
+| 6 productization | continuous | starts at Phase 4 |
 
-**≈ 6 months to v1.0** on the assumed topology; the critical path is
-R1 → Phase 2 (editor) and Phase 4 (debugger) — both are where the agent workflow is
-weakest (visual iteration), hence their risks get the largest prototypes.
+**≈ 7–8 months to v1.0** (6 nominal + contingency). **Re-plan triggers:** P1 fail
+(+4–6 wks canvas fallback, pre-estimated); Phase 3 differential failures > 2 scenario
+classes (spec revision + 1 wk); CI license friction unresolved in R6 (pivot CI host).
 
 ## Definition of done (v1.0)
 
-- [ ] Every in-scope spec statement (R2) covered by a passing golden test
-- [ ] Trees authorable entirely in the editor; zero custom serialization formats
-- [ ] Debugger: breakpoints, live flow, history replay — zero overhead when detached
-- [ ] Perf targets: ≥ NPBehave event-driven baseline; 0 B/tick steady-state allocs
-- [ ] Docs + UE-parity samples; installable UPM package; CI green on 6.6 + 6.7 LTS
-- [ ] Legal check: clean-room review pass (RISK-02)
+- [ ] Every in-scope R2 statement covered by a passing golden test (coverage table)
+- [ ] Differential traces: all R7 scenario classes pass "equality modulo timing"
+- [ ] Trees authorable entirely in the editor (scripted scenario passes by a non-author)
+- [ ] Debugger: breakpoints, live flow, history replay; detached 0 B/tick + no
+      measurable overhead (CI-enforced); attached ≤ 10% (recorded)
+- [ ] Canonical perf target met: ≥ 1.5× better baseline in 16.6 ms frame budget,
+      0 B/tick steady-state on IL2CPP
+- [ ] Serialization: merge/prefab-variant torture green; graph schema versioned with
+      forward-migration test; save-on-6.6 → load-on-6.7 green
+- [ ] Docs + UE-parity samples; UPM package installable; CI green on 6.6 + 6.7 LTS
+- [ ] Naming/trademark check passed; pre-release IP review pass (RISK-02)
