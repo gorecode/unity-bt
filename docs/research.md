@@ -161,8 +161,8 @@ testimonials on r/Unity3D / r/aigamedev, LinkedIn Unity-dev review).
 5. Tasks: instant + latent (async, multi-tick), instanced vs shared, abort/finish
    cleanup paths.
 6. **Blackboard**: typed keys (bool/int/float/string/vector/enum/object-with-filters),
-   per-asset vs per-instance values, key observers (OnBecomeRelevant /
-   OnCeaseToBeRelevant), blackboard-driven eventing.
+   per-asset vs per-instance values, node-relevance callbacks (OnBecomeRelevant /
+   OnCeaseToBeRelevant - not blackboard observers; erratum 2026-11-23, see ue-bt-spec.md S35), value-change observers, blackboard-driven eventing.
 7. Debugger: live node-state visualization, breakpoints (pause Play mode), execution
    history & replay, search/decorator-abort traces.
 8. Integrations: AI Navigation `MoveTo`-style tasks, basic gameplay tasks

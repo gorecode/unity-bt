@@ -49,8 +49,10 @@ node instancing. Sources: UE 5.8 public docs + engine source **as behavior spec 
   context, both sign off; disputes resolved against the R7 sandbox.
 - A statement is *decidable* iff a golden test can encode stimulus → expected trace.
 
-Current state: **draft v0.9 exists** (authored Nov 2026), pending review + [V]-item
-resolution in the sandbox.
+Current state: **v1.0 exists** (2026-11-23): revised after the second-agent
+review (findings B1–B11) and verified against UE 5.8 engine source (tag
+5.8.0-release, commit 7deeb413 — citations inline). Pending: human maintainer
+sign-off; remaining [V] items listed in the spec's R7 worklist.
 **Exit:** sign-offs recorded; all [V] items resolved or explicitly deferred with
 rationale.
 

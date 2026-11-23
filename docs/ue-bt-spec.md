@@ -1,22 +1,33 @@
-# UE5 Behavior Tree — Formal Specification (draft v0.9)
+# UE5 Behavior Tree — Formal Specification (v1.0)
 
-**Status: draft.** Authored Nov 2026 from UE 5.8 public documentation and established
-community knowledge, as the behavioral target for this project's runtime.
-**Review pending:** human maintainer + second frontier agent with clean context
-(acceptance rules in [implementation-plan R2](implementation-plan.md)).
-Items tagged **[V]** require resolution against the UE 5.8 sandbox (R7 traces) before
-they gate any test.
+**Status:** revised 2026-11-23 after the R2 second-agent review (findings B1–B11,
+N1–N10) and verification against UE 5.8 engine source (tag `5.8.0-release`, commit
+`7deeb413`). **Pending:** human maintainer sign-off (R2 gate).
+
+Engine source was read as *behavioral spec only* (AGENTS.md legal rule):
+statements below describe UE semantics in this project's own words. Citations
+`[src: file:line]` refer to that pinned checkout (paths relative to
+`Engine/Source`, modules `Runtime/AIModule` and `Editor/BehaviorTreeEditor`
+unless stated). Epic doc pages cited were fetched 2026-11-23.
 
 ## Statement format
 
-Every statement: `ID | statement | confidence | stimulus → expected trace (sketch)`.
-A statement is *decidable* iff a golden test can encode the stimulus and assert the
-expected trace (node activation/deactivation/result sequence + blackboard mutations;
-timestamps ignored — "equality modulo timing").
+Every statement: `ID | statement | confidence tag | stimulus & expected trace sketch`.
 
-Confidence tags: **[D]** = documented in Epic's public docs; **[K]** = well established
-community knowledge, not contradicted by docs; **[V]** = verify in sandbox;
-**[ours]** = this project's own invariant (no UE counterpart).
+- A statement is *decidable* iff a golden test can encode the stimulus and assert
+  the expected trace (node activation/deactivation/result sequence + blackboard
+  mutations; timestamps ignored — "equality modulo timing").
+- A statement may cross-reference an earlier sketch (`*(covered by S02's
+  stimulus)*)` instead of repeating it.
+- Statements marked *structural* are enforced by authoring-validation tests;
+  statements marked *bench-gated* are asserted by performance/allocation tests,
+  not trace tests.
+
+Confidence tags: **[D]** = documented in Epic's public docs; **[K]** = established
+community/engine knowledge, not contradicted by docs (v1.0: several are
+engine-source-verified; citation given); **[V]** = still requires sandbox (R7)
+confirmation before it may gate a test; **[ours]** = this project's own invariant
+(no UE counterpart).
 
 ## Naming map (working names — final public naming is the Phase-0 decision, RISK-12)
 
@@ -24,171 +35,424 @@ community knowledge, not contradicted by docs; **[V]** = verify in sandbox;
 |---|---|
 | Behavior Tree asset | `TreeAsset` |
 | Behavior Tree Component / Brain (per agent) | `TreeRunner` |
+| Root node / asset-level root decorators | `RootNode` / root decorators |
 | Composite — Selector / Sequence | `Selector` / `Sequence` |
 | Composite — Simple Parallel | `SimpleParallel` |
 | Decorator (node-attached guard) | `Decorator` (subtypes: `BlackboardDecorator`, `CooldownDecorator`, `LoopDecorator`, `TimeLimitDecorator`, `ForceResultDecorator`) |
 | Observer Aborts (None / Self / Lower Priority / Both) | `AbortMode.None / Self / LowerPriority / Both` |
+| Ignore Restart Self (per-task flag) | `RestartPolicy` (`Restart` / `KeepRunning`) |
+| Notify Observer (blackboard decorator re-evaluation mode) | `NotifyMode` (`OnResultChange` / `OnValueChange`) |
+| Key Query (Is Set / Is Not Set) | `KeyQuery` (`IsSet` / `IsNotSet`) |
+| Apply Decorator Scope (composite option) | `UnregisterBranchOnExit` |
+| Dynamic subtree injection tag | `InjectionTag` |
 | Task (instant / latent) | `InstantTask` / `LatentTask` |
 | Service | `Service` |
 | Blackboard / blackboard keys | `Blackboard` / typed `BlackboardKey<T>` |
+| Node memory (per-runner state block) | `NodeMemory` |
 | Run Behavior / Run Behavior Dynamic | `SubtreeTask` / `DynamicSubtreeTask` |
-| Node memory (per-agent instances) | node instancing model |
 | Behavior tree execution history | `ExecutionTrace` |
 
 ## Typed blackboard key catalog (exact Unity types — product set)
 
-`bool`, `int`, `float`, `double`, `string`, `UnityEngine.Vector2`,
+`bool`, `int`, `float`, `double`*, `string`, `UnityEngine.Vector2`*,
 `UnityEngine.Vector3`, `UnityEngine.Quaternion`, enum (int-backed),
-`UnityEngine.Object` (assignable with type filter). Extensions beyond this set are
-post-v1. `double` inclusion is provisional **[V]** (check UE numeric practice — no UE
-double keys; may drop).
+`UnityEngine.Object` (assignable with type filter).
+
+Decisions (v1.0):
+
+- UE `Name` maps to `string` — one string kind; UE's Name/String distinction has
+  no behavior we mirror.
+- UE `Rotator` maps to `Quaternion`; the editor documents the degrees-Euler
+  bridge (authoring parity).
+- `Vector2` has no UE blackboard counterpart → **[ours]** extension, flagged
+  like ForceFailure. `Quaternion` is the mapped counterpart of `Rotator`.
+- UE `Class` (class-filtered type reference): deferred post-v1; `Object` with a
+  type filter covers the common cases.
+- `double` provisional **[V]**: UE 5.8 ships no double key type as far as we
+  can establish (Int, Float, Bool, String, Name, Vector, Rotator, Enum, Object,
+  Class, Struct) — confirm in sandbox whether parity needs it; drop if not.
+- String design rule (**[ours]**): string *values* are immutable shared
+  references; no allocation, hashing or comparison in the tick path (AGENTS.md
+  invariant 1). Key *identifiers* are compile-time symbols — a separate concept
+  from the string value type.
 
 ---
 
 ## A. Scheduler & execution model
 
-- **S01 [D]** — Updates are event-driven; a search runs only on: tree start/restart;
-  task completion; abort completion; blackboard observer firing; explicit
-  branch-execution request. There is no per-frame traversal.
-  *Stimulus:* idle tree, one frame passes → *Trace:* empty (no node transitions).
-- **S02 [D]** — Search evaluates root-down; child order at each composite defines
-  priority (leftmost = highest).
+- **S01 [K]** — Updates are event-driven; there is no per-frame traversal. A
+  search runs only on: tree start/restart; latent-task completion; abort
+  completion; blackboard observer firing; service/timed-decorator tick;
+  explicit request. When nothing is pending, the component does not tick at
+  all. *(src-verified: the search flag is set only by execution requests
+  [src: BehaviorTreeComponent.cpp:1804-1812]; idle tick is disabled
+  [src: BehaviorTreeComponent.cpp:38-39].)*
+  *Stimulus:* latent task InProgress, several frames pass → *Trace:* no node
+  transitions.
+- **S02 [D]** — Search evaluates root-down; child order at each composite
+  defines priority (leftmost = highest).
   *Stimulus:* selector with [A(fail), B(success)] → *Trace:* A activated→failed;
   B activated→succeeded; selector succeeded.
-- **S03 [D]** — Selector: fails only when all children fail; succeeds on first child
-  success. *(covered by S02 stimulus)*
+- **S03 [D]** — Selector: fails only when all children fail; succeeds on first
+  child success. *(covered by S02's stimulus)*
 - **S04 [D]** — Re-entry: a new search that selects a branch which is currently
-  executing re-enters it — running latent tasks are NOT re-executed or restarted.
-  *Stimulus:* LP-abort re-search landing on the running branch → *Trace:* no task
-  re-activation.
-- **S05 [V]** — Enumerate the exact cases where a re-selected running task IS
-  restarted (suspected: decorator re-check failures between iterations, loop
-  restarts). Sandbox: LP abort → re-enter same branch with changed conditions.
-- **S06 [D]** — Sequence: children in order; any child failure fails the sequence
-  immediately; all succeed → success; a running latent child parks the sequence at
-  its position.
+  executing re-enters it; a running latent task is NOT re-executed **iff** the
+  task sets `RestartPolicy.KeepRunning` — with the default (`Restart`) the task
+  is aborted and re-executed. See S49. *(covered by S49's stimulus)*
+- **S05 [V]** — Residual restart cases beyond S04/S49: decorator re-check
+  failures between loop iterations, and any node classes overriding the restart
+  default. Sandbox: LP abort → re-enter same branch with changed conditions.
+  *Stimulus:* loop re-iteration whose guard flips false between iterations →
+  *Trace:* branch exits; parent observes the child's result per S23.
+- **S06 [D]** — Sequence: children in order; any child failure fails the
+  sequence immediately; all succeed → success; a running latent child parks the
+  sequence at its position.
   *Stimulus:* [A(2s latent, success), B(instant success)] → *Trace:* A
-  activated→running; (2s) A succeeded; B activated→succeeded; sequence succeeded.
-- **S07 [K]** — Instant tasks execute synchronously within one search; a search ends
-  when a latent task returns InProgress.
+  activated→running; (2s) A succeeded; B activated→succeeded; sequence
+  succeeded.
+- **S07 [K]** — Instant tasks execute synchronously within one search; a search
+  ends when a latent task returns InProgress.
   *Stimulus:* chain of instant tasks → *Trace:* all transitions within one update
   (single trace segment, one global sequence-number block).
-- **S08 [V]** — Deferred execution: enumerate which task activations / abort
-  completions are deferred to a later update (same-frame vs next-frame rules).
-  Sandbox: abort completing during a blackboard-notification storm.
+- **S08 [K]** — Deferred execution: execution requests are queued and coalesced;
+  the pending search is processed on the component's next update after the
+  request, never inline with the triggering event. *(src-verified
+  [src: BehaviorTreeComponent.cpp:1144-1150, 1804-1812].)*
+  *Stimulus:* blackboard write during a task's completion callback → *Trace:*
+  the completion's trace segment ends; search transitions appear in the next
+  update's segment.
+  *Residual [V]:* interleaving of multiple events queued within one update.
+- **S46 [D]** — The Root is unique, has exactly one child, and only a Composite
+  may be attached to it; every search begins at the Root.
+  *Stimulus:* tree start → *Trace:* the root's composite is the first node
+  activated.
+- **S48 [K]** — Continuation vs search: on task completion (Success/Failure),
+  execution continues locally at the parent composite (next child /
+  fail-over); decorators on ancestors above that parent are not re-evaluated —
+  ancestor conditions are enforced reactively by observer aborts, not by
+  continuation. Only start/restart, aborts, observer fires and explicit
+  requests trigger a root-down search. *(src-verified [src:
+  BehaviorTreeComponent.cpp:517-583, 1067-1080, 1389-1394].)*
+  *Stimulus:* sequence [A(latent success), B] with a passing-at-entry guard on
+  the sequence that later flips false (`AbortMode.None`); A completes →
+  *Trace:* B activated (guard not re-checked).
 
 ## B. Composites
 
-- **S09 [D]** — `SimpleParallel` has exactly two children: main task + background
-  subtree; both activate together.
-- **S10 [D]** — Finish mode **Immediate**: main task finishing aborts the background
-  branch; parallel result = main result.
-  *Stimulus:* main succeeds at t=1s, background running → *Trace:* background aborted;
-  parallel succeeded.
+- **S09 [D]** — `SimpleParallel` has exactly two children: main task +
+  background subtree; both activate together. The main slot accepts task nodes
+  only (editor schema).
+  *Stimulus:* parallel start → *Trace:* main task activated and background
+  branch root activated in one update.
+- **S10 [D]** — Finish mode **Immediate**: main task finishing aborts the
+  background branch; parallel result = main result. *(result mapping [K],
+  src-verified [src: BTComposite_SimpleParallel.cpp:110-126].)*
+  *Stimulus:* main succeeds at t=1s, background running → *Trace:* background
+  aborted; parallel succeeded.
 - **S11 [D]** — Finish mode **Delayed**: main task finishing lets the background
   finish naturally; parallel result = main result, delivered after background
-  completes.
-  *Stimulus:* main succeeds at t=1s, background finishes at t=3s → *Trace:* parallel
-  succeeds at t=3s with main's result.
-- **S12 [V]** — May the background branch contain a nested `SimpleParallel`?
-  (Presumed: no.) Sandbox: author nested case; record editor behavior.
-- **S13 [D]** — Aborting a `SimpleParallel` aborts both children.
-- **S14 [V]** — Background branch finishing while main still runs: effect on the
-  node (presumed: none; node keeps running on main). Sandbox: background short,
-  main long.
+  completes. *(result mapping [K], src-verified [src:
+  BTComposite_SimpleParallel.cpp:74-97].)* Special case **[V]**: an
+  instantly-succeeding main task with Delayed forces one background run before
+  finishing [src: BTComposite_SimpleParallel.cpp:98-106] — sandbox-confirm the
+  observable trace.
+  *Stimulus:* main succeeds at t=1s, background finishes at t=3s → *Trace:*
+  parallel succeeds at t=3s with main's result.
+- **S12 [K]** — The engine imposes no structural rule against nesting a
+  `SimpleParallel` inside a background branch (no editor or runtime check
+  exists; the main pin is task-only [src:
+  EdGraphSchema_BehaviorTree.cpp:265-268]). Behavior of such trees is
+  unspecified in UE. **[ours]**: our editor warns on nested parallels; runtime
+  behavior undefined. *Structural* — enforced by authoring-validation tests.
+- **S13 [K]** — Aborting a `SimpleParallel` aborts both children (main via the
+  parallel-task removal path, background via branch deactivation). *(src-verified
+  [src: BTComposite_SimpleParallel.cpp:110-126;
+  BehaviorTreeComponent.cpp:1542-1571].)*
+  *Stimulus:* observer abort on the parallel's parent while both sides run →
+  *Trace:* main Finish(Aborted); background branch deactivated; parallel
+  Finish(Aborted); new search.
+- **S14 [K]** — Background branch finishing while the main task still runs has
+  no effect on the node: the finished background child's re-selection is
+  refused within the same search and the search is postponed; the main task
+  keeps running. *(src-verified [src: BTComposite_SimpleParallel.cpp:29-47;
+  BehaviorTreeComponent.cpp:2100-2105, 2181-2186].)*
+  *Stimulus:* background (1s) shorter than main (3s) → *Trace:* background
+  deactivated at t=1; no further transitions until main finishes at t=3.
+- **S50 [K]** — Latent-abort completion ordering: a branch switch waits until
+  all in-flight latent aborts deliver Finish(Aborted) — including both children
+  of a `SimpleParallel` and nested subtree tasks — before any new node
+  activates. Ordering *between* simultaneous aborts: **[V]**.
+  *Stimulus:* observer abort on the parent of a parallel with two slow-aborting
+  children → *Trace:* both children Finish(Aborted); only then the new branch
+  activates.
+- **S58 [D]** — Composite option (UE "Apply Decorator Scope"; `SimpleParallel`
+  defaults it on): when execution flow leaves the composite, all decorators and
+  services in the branch below are unregistered (their observers cease);
+  decorators on the composite itself are unaffected. *(src-verified [src:
+  BTCompositeNode.h:196-198, BTCompositeNode.cpp:190-217].)*
+  *Stimulus:* scoped selector; flow moves to a sibling branch → *Trace:*
+  descendants' observers cease (no later aborts from them); sibling execution
+  unaffected.
 
 ## C. Decorators (guards)
 
-- **S15 [D]** — Decorators attach to composite/task nodes; multiple allowed; **all**
-  must pass (AND) for branch entry.
-- **S16 [D]** — A decorator failing at entry = branch not entered; the parent reacts
-  as if the child failed (selector: next child; sequence: fail).
+- **S15 [D]** — Decorators attach to composite and task nodes; multiple
+  allowed; **all** must pass (AND) for branch entry. The Root carries
+  asset-level decorators with subtree-only semantics (S47).
+  *Stimulus:* selector [A(two passing guards), B] → *Trace:* A runs (both
+  guards checked in one update).
+- **S16 [D]** — A decorator failing at entry = branch not entered; the parent
+  reacts as if the child failed (selector: next child; sequence: fail).
   *Stimulus:* selector [A(guard fail), B] → *Trace:* A never activates; B runs.
 - **S17 [D]** — `AbortMode.None`: condition checked only at branch entry.
-- **S18 [D]** — `AbortMode.Self`: while the branch executes, condition→false aborts
-  the branch; a new search follows.
-  *Stimulus:* running task under Self-guard; observed key flips → *Trace:* task
-  Finish(Aborted); new search from parent.
+  *Stimulus:* guard passes at entry, flips false later, None mode → *Trace:*
+  no abort; branch runs to completion.
+- **S18 [D]** — `AbortMode.Self`: while the branch executes, condition→false
+  aborts the branch; a new search follows.
+  *Stimulus:* running task under Self-guard; observed key flips → *Trace:*
+  task Finish(Aborted); new search from parent.
 - **S19 [D]** — `AbortMode.LowerPriority`: while the decorated branch is *not*
-  executing, a change of the observed condition aborts any lower-priority execution
-  and triggers a new search (which re-checks this decorator first).
-  *Stimulus:* branch1(guard on key K, LP) idle, branch2 running; K flips → *Trace:*
-  branch2 aborted; search re-checks guard; if pass → branch1 executes.
+  executing, a change that flips the decorator's observed *result* (per its
+  `NotifyMode`, S54) aborts any lower-priority execution and triggers a new
+  search — which re-checks all decorators root-down (S02), this one among them.
+  *Stimulus:* branch1(guard on key K, LP) idle, branch2 running; K flips so
+  branch1's guard now passes → *Trace:* branch2 aborted; search re-checks
+  guard; if pass → branch1 executes.
 - **S20 [D]** — `AbortMode.Both` = Self + LowerPriority simultaneously.
-- **S21 [V]** — Ordering when several observers fire from one blackboard write:
-  document the rule (suspected: priority/registration order) and its observable
-  effect on abort sequencing.
-- **S22 [V]** — Cooldown: scope and trigger point (starts on branch finish vs on
-  activation; per-agent instance). Sandbox: two rapid entries after a finish.
-- **S23 [D]** — Loop: repeats the branch N times or infinitely; variant breaks on
-  child failure. **[V]** exact result mapping for infinite-loop-with-failure.
-- **S24 [D]** — TimeLimit: branch executing past the limit is aborted.
-  **[V]** final result recorded (aborted vs failed).
-- **S25 [D]** — ForceSuccess maps branch failure→success at completion. *(ours)*
-  `ForceResultDecorator` additionally offers ForceFailure — flagged as our extension,
-  not a UE claim.
-- **S26 [V]** — Evaluation order of multiple decorators on one node (attachment
-  order vs reverse; short-circuiting). Sandbox: two failing guards with side effects.
+  *(covered by S18 + S19 stimuli combined)*
+- **S21 [K]** — UE imposes **no defined ordering** among observers notified by
+  one blackboard write (multimap iteration order; [src:
+  BlackboardComponent.cpp:426-484]); ordering between the resulting searches is
+  resolved by node priority [src: BehaviorTreeComponent.cpp:1256-1281].
+  **[ours]**: our runtime defines a deterministic order (registration order,
+  then node priority) so golden tests can assert it; differential tests must
+  not compare multi-observer ordering against UE.
+  *Stimulus (ours):* one write hitting two LP guards on different branches →
+  *Trace (ours):* branches aborted in registration order; single search after
+  both.
+- **S22 [K]** — Cooldown: the cooldown window starts when the branch
+  **deactivates** (last use = branch exit), not on activation; during the
+  window the decorator's condition is false (branch blocked, parent treats it
+  as failed); with an abort mode set the decorator stays relevant and
+  re-requests execution when the window elapses; remaining-time state is
+  per-runner `NodeMemory`. *(src-verified [src:
+  BTDecorator_Cooldown.cpp:12-88].)*
+  *Stimulus:* branch runs and exits; re-entry attempted within the window →
+  *Trace:* decorator false, branch not entered; (window elapsed) decorator
+  true, branch entered.
+- **S23 [K]** — Loop: `NumLoops` (finite, default 3, clamp 1–255) re-activates
+  the branch regardless of the child's result — child failure does **not**
+  break the loop; infinite mode repeats until `InfiniteLoopTimeoutTime`
+  (negative = forever) elapses; when the loop stops, the child's last result
+  passes through unchanged (the loop never rewrites results). A single search
+  can never loop: same-search retries are refused. Loop decorators cannot
+  carry observer abort modes. *(src-verified [src: BTDecorator_Loop.h:26-36;
+  BTDecorator_Loop.cpp:22-66; BTDecorator_Loop.cpp:17-19 for the abort
+  restriction].)*
+  *Stimulus:* finite loop N=2 over a failing instant task → *Trace:* task
+  activated→failed; task activated→failed; parent observes Failure.
+- **S24 [K]** — TimeLimit: when the limit expires while the branch executes,
+  the branch is stopped and **fails** (Failure delivered to the parent); the
+  timer resets to the full window every time the node regains focus (each new
+  relevance period). *(src-verified [src: BTDecorator_TimeLimit.cpp:13-87].)*
+  *Stimulus:* limit 2s, branch re-entered after an abort at t=1.8s → *Trace:*
+  full new 2s window before Failure.
+- **S25 [D]** — ForceSuccess converts Failed→Success at completion only;
+  aborted executions pass through as Aborted — conversion is structurally
+  excluded on the abort path *(src-verified [src:
+  BTDecorator_ForceSuccess.cpp:21-43; BTCompositeNode.cpp:252-265]).*
+  **[ours]** `ForceResultDecorator` additionally offers ForceFailure — our
+  extension, no UE counterpart (the engine has no ForceFailure node).
+  *Stimulus:* task under ForceSuccess + Self guard; guard flips → *Trace:*
+  Finish(Aborted); re-search (no success recorded).
+- **S26 [V]** — Evaluation order of multiple decorators on one node
+  (attachment order vs reverse; short-circuiting). Presumed: attachment order,
+  short-circuit. Sandbox: two failing guards with side effects.
+  *Stimulus:* node with [guard1(fail, side effect), guard2(fail, side effect)]
+  → *Trace (presumed):* guard1's side effect observed; guard2's not.
 
 ## D. Tasks
 
-- **S27 [D]** — Tasks are the only leaves; instant tasks return a terminal result
-  synchronously; latent tasks return InProgress and complete via an explicit
-  completion call (possibly many updates later).
-- **S28 [D]** — Lifecycle: activation → Execute → optional per-update Tick while
+- **S27 [D]** — Tasks are the only leaves; instant tasks return a terminal
+  result synchronously; latent tasks return InProgress and complete via an
+  explicit completion call (possibly many updates later).
+  *Stimulus:* latent task started → *Trace:* activated; InProgress; (later
+  update) terminal result.
+- **S28 [K]** — Lifecycle: activation → Execute → optional per-update Tick while
   running → Finish(∈ {Success, Failure, Aborted}) exactly once per activation.
-- **S29 [D]** — Abort path: abort request calls the task's abort hook; the task may
-  finish the abort immediately or asynchronously; the tree does not proceed past the
-  aborting task until its abort completes; Finish(Aborted) is delivered.
-- **S30 [K]** — A task whose branch is re-entered after abort restarts (new Execute),
-  it never resumes mid-state. **[V]** enumerate exceptions.
-- **S31 [K]** — Node instancing: each runner instantiates its own node instances;
-  nodes explicitly marked shared are per-asset and must not hold per-runner state.
-  **[V]** confirm UE defaults per node class (which built-ins are shared).
+  *Stimulus:* latent task completing normally → *Trace:* activated; running;
+  succeeded.
+- **S29 [K]** — Abort path: an abort request calls the task's abort hook; the
+  task may finish the abort immediately or asynchronously; the tree does not
+  proceed past the aborting task until its abort completes; Finish(Aborted) is
+  delivered.
+  *Stimulus:* abort requested on a latent task with a slow abort → *Trace:*
+  abort hook invoked; (delay) Finish(Aborted); tree proceeds only after.
+- **S30 [K]** — `NodeMemory` persists across abort and re-entry for as long as
+  the owning tree instance lives; it is not wiped by restarts. Tasks
+  re-initialize the fields they care about at activation. *(src-verified [src:
+  BehaviorTreeComponent.cpp:2755-2765, 2257-2265;
+  BehaviorTreeTypes.cpp:114-122].)*
+  *Stimulus:* task with counter memory runs, exits, is re-entered → *Trace:*
+  second run observes the first run's stored value (task-defined behavior).
+- **S31 [K]** — UE's instancing model (corrected): node objects are shared
+  templates — one duplicate per tree asset per manager, shared by all runners;
+  per-runner state lives in `NodeMemory` blocks; per-runner node *objects*
+  exist only for nodes opting into instancing (UE's Blueprint-based nodes,
+  PlayAnimation, RunBehaviorDynamic; composites can never be instanced). The
+  UE4-era `EBTNodeMemoryType` no longer exists in 5.8. *(src-verified [src:
+  BTNode.h:257-259; BehaviorTreeManager.cpp:263-317; BTNode.cpp:90-118].)*
+  **[ours]**: our runtime uses per-runner node instances as the implementation
+  mechanism instead; the observable contract is S60 (cross-agent isolation).
+  *Structural* — no golden trace of its own.
+- **S49 [D]** — `RestartPolicy` (UE "Ignore Restart Self", default `Restart`):
+  when a search selects a task that is already running, with `KeepRunning` the
+  whole search update is discarded (rolled back) and the task continues; with
+  `Restart` the task is aborted and re-executed. No UE built-in class changes
+  the default. *(src-verified [src: BTTaskNode.h:94-96;
+  BehaviorTreeComponent.cpp:2162-2186].)*
+  *Stimulus:* LP re-search lands on the running task; `KeepRunning` →
+  *Trace:* no re-activation (search discarded); `Restart` → *Trace:*
+  Finish(Aborted), then Execute again.
+- **S60 [K]** — Cross-agent isolation: two runners on one `TreeAsset` have
+  independent blackboards and independent per-runner state (cooldown timers,
+  loop counters); nothing leaks between agents. (UE achieves this with shared
+  templates + per-component memory (S31); we achieve it with per-runner
+  instances — the observable contract is identical.)
+  *Stimulus:* two runners; A finishes a Cooldown-decorated branch; both trees
+  restarted immediately → *Trace:* A blocked by cooldown, B executes.
 
 ## E. Services
 
-- **S32 [D]** — Services attach to composites; they activate when the branch becomes
-  relevant and deactivate when it ceases.
-- **S33 [D]** — While active, a service ticks at its configured interval (UE default
-  0.5 s), optionally randomized (± deviation); it also receives search-start/finish
-  and activation callbacks. **[V]** exact callback set and ordering vs child execution.
+- **S32 [D]** — Services attach to Composite **and** Task nodes. A composite
+  service is active while execution is inside the composite; a task service
+  becomes active when the task starts executing and ceases when the task's
+  branch deactivates. *(src-verified [src: BTTaskNode.h:88-90;
+  BehaviorTreeComponent.cpp:2468-2487; BTCompositeNode.cpp:135-188].)*
+  *Stimulus:* service (0.5s interval) on a 2s latent task → *Trace:* service
+  activates with the task, ticks ~3 times, deactivates at task Finish.
+- **S33 [D]** — While active, a service ticks at its configured interval (UE
+  default 0.5s — [K], an editor/API default), optionally randomized; it also
+  receives search-start/finish and activation callbacks. Options: "Call Tick on
+  Search Start" runs one immediate tick (dt = 0) when a search enters the node;
+  "Restart Timer on Each Activation" resets the countdown to a full interval at
+  every (re)activation. *(src-verified [src: BTService.h:58-64;
+  BTService.cpp:44-63].)* *Norm (ours):* golden scenarios pin random deviation
+  to 0.
+  *Stimulus:* two searches through the node within one interval, restart option
+  on vs off → *Trace:* tick counts differ accordingly.
+  *Residual [V]:* exact callback set and ordering vs child execution.
+- **S53 [V]** — Service continuity: a re-search that re-selects the currently
+  active path does not deactivate/reactivate services on that path nor reset
+  their interval timers (S33 options excepted). Presumed: continuous.
+  *Stimulus:* LP abort re-search landing back on the running branch →
+  *Trace:* no service deactivate/activate pair.
 
 ## F. Blackboard
 
-- **S34 [D]** — A blackboard **asset** defines typed keys (catalog above); each runner
-  gets a runtime **instance** with values initialized from asset defaults.
-- **S35 [D]** — Two observer kinds: value-change and presence (set/unset).
-- **S36 [K]** — Observers fire in the same update as the write that caused them
-  (before returning control to idle). **[V]** exact interleaving vs task completion
-  within one update.
-- **S37 [D]** — Clearing a key ≠ writing a value; clear fires presence observers,
-  not value observers.
-- **S38 [ours]** — Value types never box; keys are struct-typed per the catalog;
-  string keys are compile-time identifiers (no runtime string lookups in the tick
-  path).
+- **S34 [K]** — A blackboard **asset** defines typed keys; each key type may
+  carry an authored default value; each runner gets a runtime **instance**
+  whose values initialize to the authored defaults (or the type's
+  invalid/zero value when none is authored). *(src-verified [src:
+  BlackboardData.h:12-42; BlackboardKeyType_Int.h:27;
+  BlackboardComponent.cpp:176-187; BlackboardKeyType.cpp:21-40].)*
+  *Stimulus:* key with authored default 5 read before any write → *Trace:*
+  observed value 5.
+- **S35 [K]** — Observer model (corrected): there is a **single** notification
+  kind — a per-key value-change notification. Any write that changes the
+  value, and any clear of a set key, invokes all registered observers of that
+  key identically. "Presence" is not a separate mechanism; it is a `KeyQuery`
+  (IsSet / IsNotSet) evaluated by decorators. *(src-verified [src:
+  BehaviorTreeTypes.h:61-72; BlackboardComponent.cpp:426-484, 781-797].)*
+  *Stimulus:* observer on key K; K set → notification; K cleared →
+  notification.
+- **S36 [K]** — Observers fire synchronously within the write that caused them
+  (same call stack, before control returns to idle); any search they request
+  is deferred to the next update (S08). *(src-verified [src:
+  BlackboardComponent.cpp:781-797].)*
+  *Stimulus:* write K inside a task's Execute → *Trace:* observer callback
+  runs before Execute returns; search transitions in the next update.
+  *Residual [V]:* interleaving with task completion inside one update.
+- **S37 [K]** — Clearing a key notifies observers exactly as a value write
+  does (single notification kind); a no-op write (same value) does not notify
+  at all. *(src-verified [src: BlackboardComponent.cpp:781-797;
+  BlackboardComponent.h:358-361].)*
+  *Stimulus:* LP guard (IsSet on K) idle; branch2 running; K cleared →
+  *Trace:* branch2 aborted; re-search skips the guard.
+- **S38 [ours]** — Value types never box; keys are struct-typed per the
+  catalog; key identifiers are compile-time symbols (no runtime string lookups
+  in the tick path). String values follow the catalog's immutability rule.
+- **S54 [K]** — `BlackboardDecorator` model: `KeyQuery` ∈ {IsSet, IsNotSet};
+  `NotifyMode` ∈ {OnResultChange (re-evaluate only when the condition's result
+  flips), OnValueChange (re-evaluate on any notifying change of the observed
+  key)}; UE default OnResultChange. *(src-verified [src:
+  BTDecorator_Blackboard.h:21-29; BTDecorator_Blackboard.cpp:14, 72-73].)*
+  *Stimulus:* guard "K == 5", OnResultChange; K 5→6 → re-evaluation (result
+  false → Self abort fires); K 5→5 → no notification, no re-evaluation.
 
 ## G. Tree lifecycle
 
-- **S39 [D]** — One tree per runner; `SubtreeTask` runs a nested tree as part of the
-  parent's execution; nested root result maps to the task's result.
-- **S40 [K]** — `DynamicSubtreeTask` re-chooses its subtree when the observed key
-  changes (aborting the current subtree if it differs). **[V]** exact re-evaluation
-  timing.
+- **S39 [D]** — One tree per runner; `SubtreeTask` runs a nested tree as part
+  of the parent's execution; the nested root's result maps to the task's
+  result.
+  *Stimulus:* subtree with instant-success root → *Trace:* subtree activated;
+  succeeded; `SubtreeTask` succeeded.
+- **S40 [K]** — `DynamicSubtreeTask`: the subtree asset is assigned/replaced
+  at runtime by external code (component API keyed by `InjectionTag`); there
+  is **no** blackboard-key observation re-choosing it. Replacing the subtree of
+  the currently active task aborts the running subtree and starts the new one
+  via the normal abort path. Root-level decorators of the dynamic subtree are
+  not supported (dropped, error logged). *(src-verified [src:
+  BTTask_RunBehaviorDynamic.h:13-18;
+  BehaviorTreeComponent.cpp:3085-3126].)*
+  *Stimulus:* game code swaps the subtree while the task is active → *Trace:*
+  running subtree Finish(Aborted); new subtree activated.
 - **S41 [D]** — Stopping the runner aborts everything; start options reset or
   preserve the blackboard instance.
+  *Stimulus:* stop during a latent task → *Trace:* task Finish(Aborted); no
+  further transitions.
+- **S47 [K]** — Root-level decorators: a tree asset may carry decorators on
+  its root; when the tree runs as a **subtree** they are injected into the
+  parent tree at the subtree-task link (gating, observers, abort modes
+  identical to decorators placed on the `SubtreeTask`); when the asset runs as
+  the root tree they are ignored; the dynamic variant never supports them
+  (S40). *(src-verified [src: BehaviorTree.h:44-50;
+  BehaviorTreeManager.cpp:181-214]. Note: Epic's Node Reference page says the
+  Root supports no decorators — contradicted by the Run Behavior page and by
+  the engine source; source treated as authoritative.)*
+  *Stimulus:* subtree with a root guard (Self) on K; K clears while the
+  subtree's task runs → *Trace:* task Finish(Aborted); parent re-search.
+- **S59 [K]** — A subtree runs on the runner's blackboard instance: writes
+  from the nested tree are visible to the parent tree.
+  *Stimulus:* subtree writes K; parent guard on K evaluated after subtree
+  completion → *Trace:* guard sees the subtree's value.
+- **S62 [K]** — Tree idling: when a search completes with no executable
+  branch, the runner goes idle but stays **armed** (loop-execution mode):
+  observers — including those of failed branches with LP/Both aborts — remain
+  registered and can restart execution on key changes. Single-run mode
+  disarms fully. *(src-verified [src: BehaviorTreeComponent.cpp:585-613,
+  2218; BTCompositeNode.cpp:297-315].)*
+  *Stimulus:* all branches guarded false at start → *Trace:* no activations;
+  K set → observer fires → search executes branch1.
 
 ## H. Debugger & performance invariants [ours]
 
-- **S42 [ours]** — Every node transition (activation, deactivation, result, abort,
-  observer fire, service tick) is recorded into `ExecutionTrace` with a global
-  sequence number; the trace alone suffices to replay a run.
-- **S43 [ours]** — Breakpoints pause execution before the chosen node activates;
-  step commands resume one node at a time.
-- **S44 [ours]** — Instrumentation detached: 0 B/tick, no measurable tick overhead
-  (CI-enforced); attached: ≤ 10% tick-time in the standard stress scene.
-- **S45 [ours]** — Observer/event fan-out is bounded by registration count; queues
-  are pooled and bounded; no unbounded growth across a run.
+- **S42 [ours]** — Every node transition (activation, deactivation, result,
+  abort, observer fire, service tick) **and every blackboard write** is
+  recorded into `ExecutionTrace` with a global sequence number; the trace alone
+  suffices to replay a run.
+  *Stimulus:* scripted scenario → *Trace:* replay from the log reproduces the
+  original transition sequence exactly.
+- **S43 [ours]** — Breakpoints pause execution before the chosen node
+  activates; step commands resume one node at a time.
+  *Stimulus:* breakpoint on node N; run → *Trace:* execution pauses before N's
+  first activation; step → exactly N's next transition recorded.
+- **S44 [ours] (bench-gated)** — Instrumentation detached: 0 B/tick, no
+  measurable tick overhead (CI-enforced); attached: ≤ 10% tick-time in the
+  standard stress scene. Asserted by allocation/performance tests, not traces.
+- **S45 [ours] (bench-gated)** — Observer/event fan-out is bounded by
+  registration count; queues are pooled and bounded; no unbounded growth
+  across a run. Asserted by allocation/soak tests.
 
 ---
 
@@ -196,17 +460,56 @@ double keys; may drop).
 
 | §7 item | Statements |
 |---|---|
-| 1 event-driven scheduler, instancing | S01, S02, S04, S05, S07, S08, S31 |
-| 2 composites incl. Simple Parallel | S02–S06, S09–S14 |
-| 3 decorators, observer aborts | S15–S26 |
-| 4 services | S32, S33 |
-| 5 tasks (instant/latent, instanced, cleanup) | S27–S31 |
-| 6 blackboard (keys, observers, instance/asset) | S34–S38 |
+| 1 event-driven scheduler, instancing | S01, S02, S04, S05, S07, S08, S31, S46, S48, S49, S60 |
+| 2 composites incl. Simple Parallel | S02–S06, S09–S14, S50, S58 |
+| 3 decorators, observer aborts | S15–S26, S54 |
+| 4 services | S32, S33, S53 |
+| 5 tasks (instant/latent, instanced, cleanup) | S27–S31, S49 |
+| 6 blackboard (keys, observers, instance/asset) | S34–S38, S54 |
 | 7 debugger | S42–S44 (+ S45) |
-| 8 integrations (MoveTo etc.) | post-v1 of this spec (Phase 6 extends) |
+| 8 integrations (MoveTo etc.) | post-v1 of this spec (Phase 6 extends) — explicit waiver: no statements yet, by design |
 
 ## Open sandbox items (R7 worklist)
 
-S05, S08, S12, S14, S21, S22, S23(partial), S24(partial), S26, S30(partial),
-S31(partial), S33(partial), S36, S40 — 14 items; each gets a captured UE 5.8 trace
-and a resolution note appended here before it may gate a golden test.
+**Resolved from engine source 2026-11-23** (no longer sandbox-gated; citations
+inline): S08 core (request deferral), S12, S14, S22, S23, S24, S30, S31, S32,
+S34, S35, S37, S40, S47, S49 (defaults), S54 (incl. no-op write), S58, S62.
+
+**Remaining [V]** (each still gets a captured UE 5.8 trace and a resolution
+note appended before it may gate a golden test):
+
+- S05 — residual restart cases (decorator re-check between loop iterations)
+- S08 — multi-event interleaving within one update
+- S11 — Delayed-mode instant-success special case
+- S21 — UE observer ordering (sampling only; our deterministic rule is [ours]
+  and not differentially comparable)
+- S26 — decorator evaluation order on one node
+- S33 — service callback ordering vs child execution
+- S36 — write/completion interleaving within one update
+- S50 — ordering between simultaneous latent aborts
+- S53 — service continuity on re-search
+- catalog — `double` key-type decision
+
+## v1.0 changelog (relative to draft v0.9)
+
+- Template compliance: every statement now carries a stimulus → trace sketch,
+  an explicit cross-reference, or a structural/bench-gated marker (review B1);
+  all [V] research questions restated as affirmative presumptions (B2).
+- Corrected against UE 5.8 source: S04 (RestartPolicy conditioning), S23 (loop
+  never breaks on child failure; result passthrough; infinite-only timeout),
+  S24 (Failure result + reset-on-refocus), S30 (memory persists), S31 (shared
+  templates + memory blocks, not per-runner objects), S32 (services on tasks),
+  S34 (authored key defaults confirmed — the review's doubt was wrong), S35/S37
+  (single notification kind; clear notifies; no-op write silent), S40 (external
+  assignment via InjectionTag, no key observation).
+- Added: S46–S50, S53–S54, S58–S60, S62. IDs retired by folding: S51→S32,
+  S52→S33, S55→S37, S56→S24, S57→S23, S61→S25.
+- Erratum queued for research notes (§7): OnBecomeRelevant/OnCeaseRelevant are
+  node-relevance callbacks, not blackboard "key observers" — the wording that
+  produced the original S35/S37 modeling error.
+
+## Engine pin
+
+UE `5.8.0-release`, commit `7deeb413d3dc1fc034f48d1aacc0861301829d32`
+(sparse modules: AIModule, GameplayTasks, BehaviorTreeEditor, GraphEditor).
+R7 sandbox captures must record the engine build alongside the traces.
