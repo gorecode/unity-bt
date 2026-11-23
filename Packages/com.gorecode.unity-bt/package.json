@@ -3,7 +3,7 @@
   "version": "0.0.1-preview",
   "displayName": "unity-bt (working title)",
   "description": "UE5-style behavior trees for Unity. Development skeleton; product naming is a Phase-0 decision.",
-  "unity": "6000.5",
+  "unity": "6000.6",
   "author": {
     "name": "gorecode"
   },
