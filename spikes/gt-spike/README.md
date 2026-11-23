@@ -28,6 +28,8 @@ Menu items: `Assets/Create/spikes/GT Spike Graph`, `spikes/Open GT Spike Graph
 3. The importer pattern (tool-owned ScriptedImporter → runtime asset) works and is
    mandatory — GTK ships none.
 4. The graph window opens programmatically via `GraphObject.LoadGraphObjectAtPath`
-   + `ShowGraph` (reflection; see gt-notes for the Phase-2 replacement plan).
-5. The whole loop (authoring, import, window) is drivable headlessly via the
-   unity CLI — screenshots captured to `Artifacts/screenshots/`.
+   + `ShowGraph`, but **node content does not render through that path** (empty
+   grid, three vision-reviewed captures). The supported open flow (double-click /
+   CustomEditor Edit button) is a Phase-2 task — see gt-notes.
+5. The whole loop (authoring, import) is drivable headlessly via the unity CLI —
+   screenshots captured to `Artifacts/screenshots/`.

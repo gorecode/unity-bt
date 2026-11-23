@@ -142,6 +142,55 @@ namespace Gorecode.Bt.Spikes.GtSpike
                 {
                     show.Invoke(null, new object[] { graphObject });
                     Debug.Log("[GtSpike] ShowGraph invoked - graph window should be open");
+
+                    // Focus the graph window and report its screen rect so the
+                    // screenshot pass can crop exactly it. The populated graph
+                    // shows in a tab titled with the asset name, whose window
+                    // may not implement IGraphWindow - scan by title.
+                    var allWindows = Resources.FindObjectsOfTypeAll<EditorWindow>();
+                    foreach (var w in allWindows)
+                    {
+                        if (!string.IsNullOrEmpty(w.titleContent.text))
+                        {
+                            Debug.Log("[GtSpike] EditorWindow: title='" + w.titleContent.text
+                                + "' type=" + w.GetType().Name
+                                + " position=" + w.position.ToString());
+                        }
+                    }
+
+                    EditorWindow graphWindow = null;
+                    foreach (var w in allWindows)
+                    {
+                        if (w.titleContent.text.Contains("MainGraph"))
+                        {
+                            graphWindow = w;
+                            break;
+                        }
+                    }
+
+                    if (graphWindow != null)
+                    {
+                        graphWindow.Show();
+                        graphWindow.Focus();
+                        try
+                        {
+                            graphWindow.maximized = true;
+                        }
+                        catch (Exception e)
+                        {
+                            Debug.LogWarning("[GtSpike] maximize failed: " + e.Message);
+                        }
+                        graphWindow.Repaint();
+                        Debug.Log("[GtSpike] focused graph window: title='"
+                            + graphWindow.titleContent.text + "' type="
+                            + graphWindow.GetType().Name + " position="
+                            + graphWindow.position.ToString());
+                    }
+                    else
+                    {
+                        Debug.LogWarning("[GtSpike] no EditorWindow titled MainGraph found");
+                    }
+
                     return;
                 }
             }

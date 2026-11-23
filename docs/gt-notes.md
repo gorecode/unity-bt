@@ -77,7 +77,7 @@ validation errors."**
 
 ## Opening the graph window programmatically
 
-No public documented "open" API found. Working path (verified):
+No public documented "open" API found. Working-but-incomplete path (verified):
 
 1. `Unity.GraphToolkit.Editor.GraphObject.LoadGraphObjectAtPath(path, typeof(TGraph))`
    — public static, returns the wrapper (a `GraphObjectImp`).
@@ -86,9 +86,13 @@ No public documented "open" API found. Working path (verified):
 2. `Unity.GraphToolkit.Editor.Implementation.GraphViewEditorWindowImp.ShowGraph(wrapper)`
    — public static on an implementation-namespaced window class.
 
-The spike does this by reflection (`SpikeWindowProbe`). Phase 2 should find the
-supported UX path (likely a `[CustomEditor]` "Edit" button on the compiled runtime
-asset, mirroring Unity Behavior) and eliminate the reflection.
+**Finding (three vision-reviewed runs):** `ShowGraph` opens a window titled with
+the asset name, the grid canvas renders, focus/maximize work — but the populated
+graph's nodes never appear (empty grid). The raw `ShowGraph` call is evidently not
+the full open pipeline; the supported flow (double-click / `[CustomEditor]` "Edit"
+button on the compiled runtime asset, mirroring Unity Behavior) is unverified and
+is a **Phase-2 opening task**. Headless authoring/import/round-trip are unaffected
+(test-proven).
 
 ## Gotchas hit (all real, this session)
 
