@@ -1,0 +1,18 @@
+{
+    "name": "Gorecode.Bt.Editor",
+    "rootNamespace": "Gorecode.Bt.Editor",
+    "references": [
+        "Gorecode.Bt.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
