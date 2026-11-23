@@ -68,6 +68,8 @@ Decisions (v1.0):
   like ForceFailure. `Quaternion` is the mapped counterpart of `Rotator`.
 - UE `Class` (class-filtered type reference): deferred post-v1; `Object` with a
   type filter covers the common cases.
+- UE `Struct` (arbitrary instanced structs): deferred post-v1 alongside
+  `Class`; the catalog's enumerated types cover v1 needs.
 - `double` provisional **[V]**: UE 5.8 ships no double key type as far as we
   can establish (Int, Float, Bool, String, Name, Vector, Rotator, Enum, Object,
   Class, Struct) — confirm in sandbox whether parity needs it; drop if not.
@@ -82,8 +84,9 @@ Decisions (v1.0):
 
 - **S01 [K]** — Updates are event-driven; there is no per-frame traversal. A
   search runs only on: tree start/restart; latent-task completion; abort
-  completion; blackboard observer firing; service/timed-decorator tick;
-  explicit request. When nothing is pending, the component does not tick at
+  completion; blackboard observer firing; timed re-requests (interval ticks of
+  active services/timed decorators that re-request execution); explicit
+  request. When nothing is pending, the component does not tick at
   all. *(src-verified: the search flag is set only by execution requests
   [src: BehaviorTreeComponent.cpp:1804-1812]; idle tick is disabled
   [src: BehaviorTreeComponent.cpp:38-39].)*
@@ -169,8 +172,8 @@ Decisions (v1.0):
   [src: BTComposite_SimpleParallel.cpp:110-126;
   BehaviorTreeComponent.cpp:1542-1571].)*
   *Stimulus:* observer abort on the parallel's parent while both sides run →
-  *Trace:* main Finish(Aborted); background branch deactivated; parallel
-  Finish(Aborted); new search.
+  *Trace:* both children deliver Finish(Aborted) (order between them: S50's
+  [V]); parallel Finish(Aborted); new search.
 - **S14 [K]** — Background branch finishing while the main task still runs has
   no effect on the node: the finished background child's re-selection is
   refused within the same search and the search is postponed; the main task
@@ -230,6 +233,9 @@ Decisions (v1.0):
   *Stimulus (ours):* one write hitting two LP guards on different branches →
   *Trace (ours):* branches aborted in registration order; single search after
   both.
+  *Residual [V]:* UE's own notification ordering is unspecified (multimap
+  iteration); sandbox captures can only sample it — our deterministic rule is
+  not differentially comparable.
 - **S22 [K]** — Cooldown: the cooldown window starts when the branch
   **deactivates** (last use = branch exit), not on activation; during the
   window the decorator's condition is false (branch blocked, parent treats it
@@ -250,7 +256,9 @@ Decisions (v1.0):
   BTDecorator_Loop.cpp:22-66; BTDecorator_Loop.cpp:17-19 for the abort
   restriction].)*
   *Stimulus:* finite loop N=2 over a failing instant task → *Trace:* task
-  activated→failed; task activated→failed; parent observes Failure.
+  activated→failed; (next update) task activated→failed; parent observes
+  Failure. Each re-iteration is continuation-triggered (S48) and lands in its
+  own update segment (S07/S08).
 - **S24 [K]** — TimeLimit: when the limit expires while the branch executes,
   the branch is stopped and **fails** (Failure delivered to the parent); the
   timer resets to the full window every time the node regains focus (each new
@@ -329,8 +337,10 @@ Decisions (v1.0):
   becomes active when the task starts executing and ceases when the task's
   branch deactivates. *(src-verified [src: BTTaskNode.h:88-90;
   BehaviorTreeComponent.cpp:2468-2487; BTCompositeNode.cpp:135-188].)*
-  *Stimulus:* service (0.5s interval) on a 2s latent task → *Trace:* service
-  activates with the task, ticks ~3 times, deactivates at task Finish.
+  *Stimulus:* service (0.5s interval) on a 2s latent task inside a sequence →
+  *Trace:* service activates with the task, ticks ~3 times, deactivates when
+  flow leaves the task's branch (branch deactivation, not the Finish call
+  itself).
 - **S33 [D]** — While active, a service ticks at its configured interval (UE
   default 0.5s — [K], an editor/API default), optionally randomized; it also
   receives search-start/finish and activation callbacks. Options: "Call Tick on
@@ -379,7 +389,8 @@ Decisions (v1.0):
   BlackboardComponent.h:358-361].)*
   *Stimulus:* LP guard (IsSet on K) idle; branch2 running; K cleared →
   *Trace:* branch2 aborted; re-search skips the guard.
-- **S38 [ours]** — Value types never box; keys are struct-typed per the
+- **S38 [ours]** *(structural — enforced by the banned-API analyzer and
+  allocation tests)* — Value types never box; keys are struct-typed per the
   catalog; key identifiers are compile-time symbols (no runtime string lookups
   in the tick path). String values follow the catalog's immutability rule.
 - **S54 [K]** — `BlackboardDecorator` model: `KeyQuery` ∈ {IsSet, IsNotSet};
@@ -467,6 +478,7 @@ Decisions (v1.0):
 | 5 tasks (instant/latent, instanced, cleanup) | S27–S31, S49 |
 | 6 blackboard (keys, observers, instance/asset) | S34–S38, S54 |
 | 7 debugger | S42–S44 (+ S45) |
+| (tree lifecycle & subtrees — supplementary) | S39, S40, S41, S47, S59, S62 |
 | 8 integrations (MoveTo etc.) | post-v1 of this spec (Phase 6 extends) — explicit waiver: no statements yet, by design |
 
 ## Open sandbox items (R7 worklist)
@@ -507,6 +519,12 @@ note appended before it may gate a golden test):
 - Erratum queued for research notes (§7): OnBecomeRelevant/OnCeaseRelevant are
   node-relevance callbacks, not blackboard "key observers" — the wording that
   produced the original S35/S37 modeling error.
+- Delta pass (same reviewer, post-revision): approved with changes; the seven
+  consistency fixes applied — S32 sketch aligned to branch deactivation, S38
+  marked structural, S13 sketch no longer asserts an abort ordering S50 leaves
+  open, S21 gained an inline residual-[V] line, coverage table gained the
+  lifecycle row, catalog gained the Struct deferral, S01's trigger list scoped
+  and S23's sketch pinned to per-update iterations.
 
 ## Engine pin
 
