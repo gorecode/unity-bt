@@ -18,6 +18,10 @@ namespace Gorecode.Bt.Spikes.GtSpike.Tests
         const string k_SubGraphPath = k_ArtifactsDir + "/SubGraph.gtspike";
         const string k_MainGraphPath = k_ArtifactsDir + "/MainGraph.gtspike";
 
+        // Grid of the top-down layout.
+        const float k_LevelHeight = 200f;
+        const float k_ColumnWidth = 300f;
+
         [Test]
         public void GraphToolkit_SpikeAuthoringRoundTrips()
         {
@@ -45,6 +49,20 @@ namespace Gorecode.Bt.Spikes.GtSpike.Tests
             var bbCondition = new SpikeBlackboardCondition();
             var loop = new SpikeLoop();
 
+            // One depth level per row, each node centered over its children (matches
+            // the vertical ports: entry on top, exits at the bottom).
+            root.Position = At(0.75f, 0);
+            selector.Position = At(0.75f, 1);
+            sequence.Position = At(0f, 2);
+            cooldown.Position = At(0f, 3);
+            moveTo.Position = At(0f, 4);
+            bbCondition.Position = At(1.5f, 2);
+            parallel.Position = At(1.5f, 3);
+            wait.Position = At(1f, 4);
+            loop.Position = At(1f, 5);
+            bbWrite.Position = At(1f, 6);
+            log.Position = At(2f, 4);
+
             graph.AddNode(root);
             graph.AddNode(selector);
             graph.AddNode(sequence);
@@ -57,7 +75,7 @@ namespace Gorecode.Bt.Spikes.GtSpike.Tests
             graph.AddNode(bbCondition);
             graph.AddNode(loop);
 
-            var subNode = graph.AddSubgraphNode(sub, new Vector2(600, 200));
+            var subNode = graph.AddSubgraphNode(sub, At(3f, 0));
             Assert.That(subNode, Is.Not.Null);
 
             Assert.That(graph.Connect(root.GetOutputPortByName("Out"), selector.GetInputPortByName("In")), Is.True);
@@ -84,6 +102,12 @@ namespace Gorecode.Bt.Spikes.GtSpike.Tests
             var reloadedRoot = reloaded.GetNodes().OfType<SpikeRoot>().Single();
             Assert.That(reloadedRoot.GetOutputPortByName("Out").IsConnected, Is.True);
 
+            // The layout survives the round-trip.
+            Assert.That(reloadedRoot.Position, Is.EqualTo(At(0.75f, 0)));
+            Assert.That(reloaded.GetNodes().OfType<SpikeSelector>().Single().Position, Is.EqualTo(At(0.75f, 1)));
+            Assert.That(reloaded.GetNodes().OfType<SpikeLog>().Single().Position, Is.EqualTo(At(2f, 4)));
+            Assert.That(reloaded.GetNodes().OfType<SpikeBlackboardWrite>().Single().Position, Is.EqualTo(At(1f, 6)));
+
             var reloadedSubNodes = reloaded.GetNodes().OfType<ISubgraphNode>().ToList();
             Assert.That(reloadedSubNodes.Count, Is.EqualTo(1));
         }
@@ -93,10 +117,18 @@ namespace Gorecode.Bt.Spikes.GtSpike.Tests
             graph.UndoBeginRecordGraph("Author spike subgraph");
             var root = new SpikeRoot();
             var wait = new SpikeWait();
+            root.Position = At(0f, 0);
+            wait.Position = At(0f, 1);
             graph.AddNode(root);
             graph.AddNode(wait);
             Assert.That(graph.Connect(root.GetOutputPortByName("Out"), wait.GetInputPortByName("In")), Is.True);
             graph.UndoEndRecordGraph();
+        }
+
+        /// <summary>A grid cell: <paramref name="columns"/> column widths from the left edge, <paramref name="level"/> rows down.</summary>
+        static Vector2 At(float columns, int level)
+        {
+            return new Vector2(columns * k_ColumnWidth, level * k_LevelHeight);
         }
     }
 }

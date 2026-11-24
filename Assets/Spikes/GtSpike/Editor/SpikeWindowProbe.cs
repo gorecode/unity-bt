@@ -9,7 +9,7 @@ namespace Gorecode.Bt.Spikes.GtSpike
 {
     // Throwaway P1 helper: opens the spike graph in the GTK window for the
     // screenshot pass and reports the GTK module's window/importer API via
-    // reflection. Delete after the spike.
+    // reflection. Kept as P1 evidence (docs/gt-notes.md).
     public static class SpikeWindowProbe
     {
         const string k_MainGraphPath = "Assets/Spikes/GtSpike/TestArtifacts/MainGraph.gtspike";

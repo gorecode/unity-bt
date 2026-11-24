@@ -1,0 +1,6 @@
+/* Spike node card. Graph Toolkit draws every node 124 px wide, whatever its
+   title, which truncates most titles. */
+.ge-node {
+    width: auto;
+    min-width: 220px;
+}
