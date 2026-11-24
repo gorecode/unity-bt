@@ -66,7 +66,6 @@ namespace Gorecode.Bt.Tests.Golden
             foreach (var s in scenarios)
             {
                 var label = Path.GetFileName(s.Source) + ":" + s.Id;
-                Assert.That(s.DeclaredSchema, Is.EqualTo(GoldenScenario.Schema), label + " schema");
                 Assert.That(s.Id, Is.Not.Null.And.Not.Empty, label + " id");
                 Assert.That(s.Title, Is.Not.Null.And.Not.Empty, label + " title");
                 Assert.That(s.Statements, Is.Not.Empty, label + " statements");
@@ -106,6 +105,16 @@ namespace Gorecode.Bt.Tests.Golden
         {
             var ids = GoldenScenario.LoadAll(ScenariosDir).Select(s => s.Id).ToList();
             Assert.That(ids.Distinct().Count(), Is.EqualTo(ids.Count), "duplicate scenario ids");
+        }
+
+        [Test]
+        public void Scenarios_RequireOnlyKnownCapabilities()
+        {
+            var scenarios = GoldenScenario.LoadAll(ScenariosDir);
+            var unknown = scenarios
+                .SelectMany(s => s.Requires.Where(r => !GoldenCapabilities.IsKnown(r)).Select(r => Path.GetFileName(s.Source) + ":" + s.Id + " requires '" + r + "'"))
+                .ToList();
+            Assert.That(unknown, Is.Empty, "unknown capability names (typos would silently skip a scenario forever)");
         }
 
         [Test]

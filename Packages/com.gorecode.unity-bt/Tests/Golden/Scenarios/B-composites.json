@@ -1,4 +1,5 @@
 {
+  "schema": "unity-bt.golden/1",
   "scenarios": [
     {
       "id": "S09-parallel-activates-both",
@@ -55,7 +56,7 @@
       "expected": { "updates": [
         ["search:root", "par.activate", "m.activate", "bg.activate"],
         ["m.finish:Success"],
-        ["search:par"],
+        [],
         ["bg.finish:Success"],
         ["search:par", "par.complete:Success"]
       ]}
@@ -64,7 +65,7 @@
       "id": "S13-parallel-abort-both-children",
       "title": "Aborting a SimpleParallel aborts both children (order between them: S50's open item)",
       "statements": ["S13"],
-      "requires": ["selector", "instantTask", "latentTask", "simpleParallel", "blackboardDecorator", "observerAbort.lowerPriority"],
+      "requires": ["selector", "instantTask", "latentTask", "simpleParallel", "blackboardDecorator", "observerAbort.lowerPriority", "verify:S50"],
       "tree": {
         "root": "sel",
         "nodes": {
@@ -77,18 +78,19 @@
         }
       },
       "blackboard": { "K": 0 },
-      "stimulus": ["start", "tick", "write:K=1", "tick"],
+      "stimulus": ["start", "tick", "write:K=1", "tick", "settle"],
       "expected": { "updates": [
         ["search:root", "sel.activate", "g.fail", "par.activate", "m.activate", "bg.activate"],
         ["bb.write:K=1", "g.observe", "g.pass"],
-        ["m.abort", "m.finish:Aborted", "bg.abort", "bg.finish:Aborted", "search:root", "g.pass", "t.activate", "t.finish:Success", "sel.complete:Success"]
+        ["search:sel", "g.pass", "m.abort", "m.finish:Aborted", "bg.abort", "bg.finish:Aborted", "t.activate", "t.finish:Success"],
+        ["search:sel", "sel.complete:Success"]
       ]}
     },
     {
       "id": "S14-parallel-background-finishes-early",
-      "title": "The background finishing while the main task runs has no effect on the parallel",
+      "title": "[V] The background finishing while the main task runs: presumed no effect on the parallel (sandbox S14)",
       "statements": ["S14"],
-      "requires": ["simpleParallel", "latentTask", "timeAdvance"],
+      "requires": ["simpleParallel", "latentTask", "timeAdvance", "verify:S14"],
       "tree": {
         "root": "par",
         "nodes": {
@@ -110,7 +112,7 @@
       "id": "S50-latent-aborts-ordered",
       "title": "[V] A branch switch waits for all in-flight latent aborts; ordering between them (sandbox S50)",
       "statements": ["S50"],
-      "requires": ["selector", "instantTask", "latentTask", "simpleParallel", "blackboardDecorator", "observerAbort.lowerPriority", "timeAdvance", "verify:S50"],
+      "requires": ["selector", "instantTask", "latentTask", "slowAbort", "simpleParallel", "blackboardDecorator", "observerAbort.lowerPriority", "timeAdvance", "verify:S50"],
       "tree": {
         "root": "sel",
         "nodes": {
@@ -123,13 +125,14 @@
         }
       },
       "blackboard": { "K": 0 },
-      "stimulus": ["start", "tick", "write:K=1", "tick", "advance:1", "tick"],
+      "stimulus": ["start", "tick", "write:K=1", "tick", "advance:1", "tick", "settle"],
       "expected": { "updates": [
         ["search:root", "sel.activate", "g.fail", "par.activate", "m.activate", "bg.activate"],
         ["bb.write:K=1", "g.observe", "g.pass"],
-        ["m.abort", "bg.abort"],
+        ["search:sel", "g.pass", "m.abort", "bg.abort"],
         ["m.finish:Aborted", "bg.finish:Aborted"],
-        ["search:root", "g.pass", "t.activate", "t.finish:Success", "sel.complete:Success"]
+        ["search:sel", "g.pass", "t.activate", "t.finish:Success"],
+        ["search:sel", "sel.complete:Success"]
       ]}
     },
     {

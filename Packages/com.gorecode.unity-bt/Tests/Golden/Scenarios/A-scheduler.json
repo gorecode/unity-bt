@@ -1,7 +1,7 @@
 {
+  "schema": "unity-bt.golden/1",
   "scenarios": [
     {
-      "schema": "unity-bt.golden/1",
       "id": "S01-idle-no-transitions",
       "title": "Event-driven: a running latent task produces no node transitions while nothing happens",
       "statements": ["S01"],
@@ -33,52 +33,88 @@
           "b": { "type": "InstantTask", "result": "Success" }
         }
       },
-      "stimulus": ["start", "tick"],
+      "stimulus": ["start", "settle"],
       "expected": { "updates": [
-        ["search:root", "sel.activate", "a.activate", "a.finish:Failure", "b.activate", "b.finish:Success", "sel.complete:Success"]
+        ["search:root", "sel.activate", "a.activate", "a.finish:Failure"],
+        ["search:sel", "b.activate", "b.finish:Success"],
+        ["search:sel", "sel.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S07-S46-one-task-per-update",
+      "title": "A search activates at most one task per update; a chain of instant tasks takes one update each",
+      "statements": ["S07", "S46"],
+      "requires": ["sequence", "instantTask"],
+      "tree": {
+        "root": "seq",
+        "nodes": {
+          "seq": { "type": "Sequence", "children": ["a", "b", "c"] },
+          "a": { "type": "InstantTask", "result": "Success" },
+          "b": { "type": "InstantTask", "result": "Success" },
+          "c": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "stimulus": ["start", "settle"],
+      "expected": { "updates": [
+        ["search:root", "seq.activate", "a.activate", "a.finish:Success"],
+        ["search:seq", "b.activate", "b.finish:Success"],
+        ["search:seq", "c.activate", "c.finish:Success"],
+        ["search:seq", "seq.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S08-deferred-continuation",
+      "title": "Every request is deferred: an instant task's result is processed by the next update, never inline",
+      "statements": ["S08"],
+      "requires": ["selector", "instantTask"],
+      "tree": {
+        "root": "sel",
+        "nodes": {
+          "sel": { "type": "Selector", "children": ["a", "b"] },
+          "a": { "type": "InstantTask", "result": "Failure" },
+          "b": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "stimulus": ["start", "tick", "tick", "tick"],
+      "expected": { "updates": [
+        ["search:root", "sel.activate", "a.activate", "a.finish:Failure"],
+        ["search:sel", "b.activate", "b.finish:Success"],
+        ["search:sel", "sel.complete:Success"]
       ]}
     },
     {
       "id": "S04-S49-keep-running",
-      "title": "Re-search landing on a running task with RestartPolicy.KeepRunning discards the search",
+      "title": "A restart re-selecting a running task with RestartPolicy.KeepRunning discards the whole search",
       "statements": ["S04", "S49"],
-      "requires": ["selector", "latentTask", "blackboardDecorator", "observerAbort.lowerPriority", "restartPolicy"],
+      "requires": ["sequence", "latentTask", "restartPolicy"],
       "tree": {
-        "root": "sel",
+        "root": "seq",
         "nodes": {
-          "sel": { "type": "Selector", "children": ["w1", "g"] },
-          "w1": { "type": "LatentTask", "restartPolicy": "KeepRunning" },
-          "g": { "type": "BlackboardDecorator", "child": "t2", "key": "K", "query": { "op": "eq", "value": 1 }, "abort": "LowerPriority" },
-          "t2": { "type": "InstantTask", "result": "Failure" }
+          "seq": { "type": "Sequence", "children": ["w1"] },
+          "w1": { "type": "LatentTask", "restartPolicy": "KeepRunning" }
         }
       },
-      "blackboard": { "K": 0 },
-      "stimulus": ["start", "tick", "write:K=1", "tick"],
+      "stimulus": ["start", "tick", "start", "tick"],
       "expected": { "updates": [
-        ["search:root", "sel.activate", "w1.activate"],
-        ["bb.write:K=1", "g.observe", "g.pass"],
+        ["search:root", "seq.activate", "w1.activate"],
         ["search:root", "search:discard"]
       ]}
     },
     {
       "id": "S04-S49-restart-default",
-      "title": "Re-search landing on a running task with the default RestartPolicy aborts and re-executes it",
+      "title": "A restart re-selecting a running task with the default RestartPolicy aborts and re-executes it",
       "statements": ["S04", "S49"],
-      "requires": ["selector", "latentTask", "blackboardDecorator", "observerAbort.lowerPriority", "restartPolicy"],
+      "requires": ["sequence", "latentTask", "restartPolicy"],
       "tree": {
-        "root": "sel",
+        "root": "seq",
         "nodes": {
-          "sel": { "type": "Selector", "children": ["w1", "g"] },
-          "w1": { "type": "LatentTask" },
-          "g": { "type": "BlackboardDecorator", "child": "t2", "key": "K", "query": { "op": "eq", "value": 1 }, "abort": "LowerPriority" },
-          "t2": { "type": "InstantTask", "result": "Failure" }
+          "seq": { "type": "Sequence", "children": ["w1"] },
+          "w1": { "type": "LatentTask" }
         }
       },
-      "blackboard": { "K": 0 },
-      "stimulus": ["start", "tick", "write:K=1", "tick"],
+      "stimulus": ["start", "tick", "start", "tick"],
       "expected": { "updates": [
-        ["search:root", "sel.activate", "w1.activate"],
-        ["bb.write:K=1", "g.observe", "g.pass"],
+        ["search:root", "seq.activate", "w1.activate"],
         ["search:root", "w1.abort", "w1.finish:Aborted", "w1.activate"]
       ]}
     },
@@ -86,7 +122,7 @@
       "id": "S05-loop-guard-flip",
       "title": "[V] Loop re-iteration whose guard flips false between iterations (sandbox S05)",
       "statements": ["S05"],
-      "requires": ["selector", "loop", "blackboardDecorator", "verify:S05"],
+      "requires": ["selector", "instantTask", "loop", "blackboardDecorator", "verify:S05"],
       "tree": {
         "root": "sel",
         "nodes": {
@@ -98,11 +134,12 @@
         }
       },
       "blackboard": { "K": 0 },
-      "stimulus": ["start", "tick", "write:K=1", "tick"],
+      "stimulus": ["start", "tick", "write:K=1", "tick", "settle"],
       "expected": { "updates": [
         ["search:root", "sel.activate", "loop.pass", "g.pass", "a.activate", "a.finish:Failure"],
         ["bb.write:K=1"],
-        ["g.fail", "c.activate", "c.finish:Success", "sel.complete:Success"]
+        ["search:sel", "loop.pass", "g.fail", "c.activate", "c.finish:Success"],
+        ["search:sel", "sel.complete:Success"]
       ]}
     },
     {
@@ -118,37 +155,19 @@
           "b": { "type": "InstantTask", "result": "Success" }
         }
       },
-      "stimulus": ["start", "tick", "advance:2", "tick"],
+      "stimulus": ["start", "tick", "advance:2", "tick", "settle"],
       "expected": { "updates": [
         ["search:root", "seq.activate", "a.activate"],
         ["a.finish:Success"],
-        ["search:seq", "b.activate", "b.finish:Success", "seq.complete:Success"]
+        ["search:seq", "b.activate", "b.finish:Success"],
+        ["search:seq", "seq.complete:Success"]
       ]}
     },
     {
-      "id": "S07-S46-instant-chain-one-update",
-      "title": "A chain of instant tasks executes within one update; the root composite activates first",
-      "statements": ["S07", "S46"],
-      "requires": ["sequence", "instantTask"],
-      "tree": {
-        "root": "seq",
-        "nodes": {
-          "seq": { "type": "Sequence", "children": ["a", "b", "c"] },
-          "a": { "type": "InstantTask", "result": "Success" },
-          "b": { "type": "InstantTask", "result": "Success" },
-          "c": { "type": "InstantTask", "result": "Success" }
-        }
-      },
-      "stimulus": ["start", "tick"],
-      "expected": { "updates": [
-        ["search:root", "seq.activate", "a.activate", "a.finish:Success", "b.activate", "b.finish:Success", "c.activate", "c.finish:Success", "seq.complete:Success"]
-      ]}
-    },
-    {
-      "id": "S08-S36-observer-deferred-search",
-      "title": "An observer fires synchronously inside the write; the search it requests runs in the next update",
-      "statements": ["S08", "S36"],
-      "requires": ["selector", "sequence", "instantTask", "blackboardDecorator", "observerAbort.lowerPriority"],
+      "id": "S36-observer-inside-task-update",
+      "title": "[V] An observer firing inside a task's update and that task's completion land in one update; the higher-priority request wins (sandbox S08)",
+      "statements": ["S36"],
+      "requires": ["selector", "sequence", "instantTask", "blackboardDecorator", "observerAbort.lowerPriority", "verify:S08"],
       "tree": {
         "root": "sel",
         "nodes": {
@@ -161,10 +180,11 @@
         }
       },
       "blackboard": { "K": 0 },
-      "stimulus": ["start", "tick", "tick"],
+      "stimulus": ["start", "tick", "tick", "settle"],
       "expected": { "updates": [
-        ["search:root", "sel.activate", "g.fail", "seq2.activate", "a.activate", "bb.write:K=1", "g.observe", "g.pass", "a.finish:Success", "b.activate", "b.finish:Success", "seq2.complete:Success", "sel.complete:Success"],
-        ["search:root", "sel.activate", "g.pass", "t1.activate", "t1.finish:Success", "sel.complete:Success"]
+        ["search:root", "sel.activate", "g.fail", "seq2.activate", "a.activate", "bb.write:K=1", "g.observe", "g.pass", "a.finish:Success"],
+        ["search:sel", "g.pass", "t1.activate", "t1.finish:Success"],
+        ["search:sel", "sel.complete:Success"]
       ]}
     },
     {
@@ -183,12 +203,13 @@
         }
       },
       "blackboard": { "K": 0 },
-      "stimulus": ["start", "tick", "write:K=1", "complete:a:Success", "tick"],
+      "stimulus": ["start", "tick", "write:K=1", "complete:a:Success", "tick", "settle"],
       "expected": { "updates": [
         ["search:root", "sel.activate", "g.pass", "seq2.activate", "a.activate"],
         ["bb.write:K=1"],
         ["a.finish:Success"],
-        ["search:seq2", "b.activate", "b.finish:Success", "seq2.complete:Success", "sel.complete:Success"]
+        ["search:seq2", "b.activate", "b.finish:Success"],
+        ["search:seq2", "seq2.complete:Success", "sel.complete:Success"]
       ]}
     }
   ]

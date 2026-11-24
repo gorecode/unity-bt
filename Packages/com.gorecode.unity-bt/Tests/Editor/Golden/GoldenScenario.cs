@@ -25,6 +25,8 @@ namespace Gorecode.Bt.Tests.Golden
         public string[] Stimulus = Array.Empty<string>();
         public string[][] ExpectedUpdates = Array.Empty<string[]>();
         public JObject Expected;
+        public bool Looped;
+        public bool PendingAtEnd;
 
         public static List<GoldenScenario> LoadAll(string directory)
         {
@@ -46,6 +48,12 @@ namespace Gorecode.Bt.Tests.Golden
         {
             var root = JToken.Parse(File.ReadAllText(path));
             var list = root is JObject o && o["scenarios"] is JArray arr ? arr : new JArray(root);
+            var schema = (string)root["schema"] ?? (string)list.First()?["schema"];
+            if (schema != Schema)
+            {
+                throw new FormatException(Path.GetFileName(path) + ": schema must be '" + Schema + "'");
+            }
+
             foreach (var token in list)
             {
                 yield return FromJson((JObject)token, path);
@@ -74,6 +82,8 @@ namespace Gorecode.Bt.Tests.Golden
             }
 
             s.Stimulus = Strings(o["stimulus"]);
+            s.Looped = (bool?)o["loop"] ?? false;
+            s.PendingAtEnd = (bool?)o["pendingAtEnd"] ?? false;
             s.Expected = o["expected"] as JObject;
             var updates = s.Expected?["updates"] as JArray;
             if (updates != null)

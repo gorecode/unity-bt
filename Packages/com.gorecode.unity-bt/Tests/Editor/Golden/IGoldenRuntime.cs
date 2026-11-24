@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
+using System.Text.RegularExpressions;
 using Newtonsoft.Json.Linq;
 
 namespace Gorecode.Bt.Tests.Golden
@@ -12,16 +12,16 @@ namespace Gorecode.Bt.Tests.Golden
     /// </summary>
     public interface IGoldenRuntime
     {
-        /// <summary>Capability names the runtime supports; scenarios requiring a missing one are skipped.</summary>
+        /// <summary>Capability names the runtime supports (see <see cref="GoldenCapabilities"/>); scenarios requiring a missing one are skipped.</summary>
         IReadOnlyCollection<string> Capabilities { get; }
 
-        /// <summary>Builds the tree and initializes the blackboard instance.</summary>
-        void Load(JObject tree, IReadOnlyDictionary<string, JToken> blackboard);
+        /// <summary>Builds the tree (plus named extra trees) and initializes the blackboard instance.</summary>
+        void Load(JObject tree, JObject namedTrees, IReadOnlyDictionary<string, JToken> blackboard, bool loopedExecution);
 
         /// <summary>
-        /// Applies a non-tick stimulus step (start, stop, write:, clear:, complete:, advance:)
-        /// and appends the events it produces synchronously (writes, observer firings,
-        /// latent finishes) to <paramref name="segment"/>.
+        /// Applies a non-tick stimulus step (start, stop, write:, clear:, complete:, advance:,
+        /// inject:, breakpoint:, step, resume) and appends the events it produces
+        /// synchronously (writes, observer firings, latent finishes) to <paramref name="segment"/>.
         /// </summary>
         void ApplyStep(string step, List<string> segment);
 
@@ -30,5 +30,25 @@ namespace Gorecode.Bt.Tests.Golden
 
         /// <summary>True while a deferred execution request is waiting for the next update.</summary>
         bool HasPendingRequests { get; }
+    }
+
+    /// <summary>Closed list of capability names; a name outside it in a scenario's "requires" fails the suite.</summary>
+    public static class GoldenCapabilities
+    {
+        public static readonly HashSet<string> Known = new HashSet<string>
+        {
+            "selector", "sequence", "simpleParallel", "unregisterBranchOnExit",
+            "instantTask", "latentTask", "slowAbort", "restartPolicy",
+            "blackboard", "blackboardDecorator",
+            "observerAbort.self", "observerAbort.lowerPriority", "observerAbort.both", "notify.valueChange",
+            "timeAdvance", "cooldown", "loop", "timeLimit", "forceResult", "service",
+            "subtree", "dynamicSubtree", "multiRunner", "loopedExecution", "stop",
+            "debugger.replay", "debugger.breakpoints",
+        };
+
+        public static bool IsKnown(string capability)
+        {
+            return Known.Contains(capability) || Regex.IsMatch(capability, @"^verify:S\d{2}$");
+        }
     }
 }

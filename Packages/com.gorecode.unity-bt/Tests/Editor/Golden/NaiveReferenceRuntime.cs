@@ -8,9 +8,13 @@ namespace Gorecode.Bt.Tests.Golden
 {
     /// <summary>
     /// Naive reference runtime used only to validate the golden harness (P3).
-    /// Not the product runtime: no zero-alloc constraints, no scheduler optimizations.
-    /// It follows docs/ue-bt-spec.md v1.0 for the capabilities it declares; Phase 1's
-    /// runtime must pass the same scenarios, after which this class is deleted.
+    /// Not the product runtime: it trades structure for readability and has no
+    /// zero-alloc constraints. Its update model mirrors UE 5.8's component loop as
+    /// read from source: a search only finds the next task, then the current task
+    /// is aborted if the search moved away, then exactly one task executes
+    /// (BehaviorTreeComponent.cpp:2094-2222); every request is deferred to the
+    /// next update. Phase 1's runtime must pass the same scenarios; this class is
+    /// then deleted.
     /// </summary>
     public sealed class NaiveReferenceRuntime : IGoldenRuntime
     {
@@ -18,13 +22,18 @@ namespace Gorecode.Bt.Tests.Golden
 
         static readonly string[] s_Capabilities =
         {
-            "selector", "sequence", "instantTask", "latentTask", "blackboard",
-            "blackboardDecorator", "observerAbort.self", "observerAbort.lowerPriority",
-            "observerAbort.both", "restartPolicy", "timeAdvance", "cooldown", "loop",
-            "timeLimit", "forceResult", "stop",
+            "selector", "sequence", "instantTask", "latentTask", "blackboard", "blackboardDecorator",
+            "observerAbort.self", "observerAbort.lowerPriority", "observerAbort.both",
+            "restartPolicy", "notify.valueChange", "timeAdvance", "cooldown", "loop", "timeLimit",
+            "forceResult", "stop", "slowAbort", "loopedExecution",
         };
 
-        enum St { Idle, Running, Success, Failure, Discarded }
+        const int k_NoChild = -2;
+        const int k_None = -1;
+
+        enum St { Idle, Running, Success, Failure }
+
+        enum ReqKind { Root, Continue, BranchStart }
 
         abstract class N
         {
@@ -38,7 +47,8 @@ namespace Gorecode.Bt.Tests.Golden
         sealed class Comp : N
         {
             public readonly List<N> Children = new List<N>();
-            public int ActiveIndex = -1;
+            public int ActiveIndex = k_None;
+            public int OverrideChild = k_None;
         }
 
         sealed class Dec : N
@@ -48,7 +58,7 @@ namespace Gorecode.Bt.Tests.Golden
             public string Key, Query, Mode, ForceResult;
             public JToken QueryValue;
             public double Seconds, Timeout, LastExit = -1e9, StartedAt;
-            public int Count, Iterations, TimerId = -1;
+            public int Count, Remaining, TimerId = -1;
         }
 
         sealed class Tsk : N
@@ -58,42 +68,70 @@ namespace Gorecode.Bt.Tests.Golden
             public double Duration, AbortDelay;
             public int TimerId = -1, Activations;
             public bool KeepRunning, CountActivations;
-            public Req PendingContinue;
         }
 
-        abstract class Req { }
-        sealed class RootSearchReq : Req { }
-        sealed class ContinueReq : Req { public Comp Owner; public int Idx; public string Result; }
-        sealed class BranchAbortReq : Req { public Dec D; public bool FailureResult; }
-        sealed class LowerAbortReq : Req { public Dec D; }
-        sealed class LoopReq : Req { public Dec D; public List<Dec> Chain; public int I; public Comp Owner; public int Idx; }
-        sealed class StopReq : Req { }
+        sealed class Req
+        {
+            public ReqKind Kind;
+            public Comp Start;
+            public int ChildIdx;
+            public string Result;
+        }
 
-        sealed class Timer { public int Id; public double Due; public Action<List<string>> Act; }
+        sealed class Completion
+        {
+            public Comp Node;
+            public string Result;
+        }
+
+        sealed class SearchResult
+        {
+            public Tsk Task;
+            public bool Valid = true;
+            public readonly List<Comp> Path = new List<Comp>();
+            public readonly List<int> PathIdx = new List<int>();
+            public readonly List<Completion> Completions = new List<Completion>();
+            public readonly List<Action> Undo = new List<Action>();
+        }
+
+        sealed class Timer
+        {
+            public int Id;
+            public double Due;
+            public Action<List<string>> Act;
+        }
 
         N m_Root;
+        Comp m_RootComp;
         readonly Dictionary<string, N> m_Nodes = new Dictionary<string, N>();
         readonly Dictionary<string, JToken> m_Blackboard = new Dictionary<string, JToken>();
-        readonly List<Dec> m_Observers = new List<Dec>();
-        readonly List<Tsk> m_DelayedAborts = new List<Tsk>();
+        readonly List<Dec> m_Armed = new List<Dec>();
         readonly List<Timer> m_Timers = new List<Timer>();
-        List<Req> m_Pending = new List<Req>();
+        Req m_Pending;
+        Tsk m_ActiveTask;
+        bool m_Looped;
+        bool m_AbortInProgress;
+        Req m_Deferred;
         double m_Clock;
         int m_NextTimerId;
 
-        public bool HasPendingRequests => m_Pending.Count > 0;
+        public bool HasPendingRequests => m_Pending != null;
 
         // ---------------------------------------------------------------- loading
 
-        public void Load(JObject tree, IReadOnlyDictionary<string, JToken> blackboard)
+        public void Load(JObject tree, JObject namedTrees, IReadOnlyDictionary<string, JToken> blackboard, bool loopedExecution)
         {
             m_Nodes.Clear();
             m_Blackboard.Clear();
-            m_Observers.Clear();
+            m_Armed.Clear();
             m_Timers.Clear();
-            m_Pending = new List<Req>();
+            m_Pending = null;
+            m_ActiveTask = null;
+            m_AbortInProgress = false;
+            m_Deferred = null;
             m_Clock = 0;
             m_NextTimerId = 0;
+            m_Looped = loopedExecution;
 
             if (blackboard != null)
             {
@@ -106,6 +144,7 @@ namespace Gorecode.Bt.Tests.Golden
             var nodes = (JObject)tree["nodes"];
             var rootId = (string)tree["root"];
             m_Root = Build(rootId, (JObject)nodes[rootId], nodes, null);
+            m_RootComp = m_Root as Comp;
             var prio = 0;
             AssignPrio(m_Root, ref prio);
         }
@@ -221,8 +260,7 @@ namespace Gorecode.Bt.Tests.Golden
         static void AssignPrio(N n, ref int prio)
         {
             n.Prio = prio++;
-            var c = n as Comp;
-            if (c != null)
+            if (n is Comp c)
             {
                 foreach (var child in c.Children)
                 {
@@ -232,8 +270,7 @@ namespace Gorecode.Bt.Tests.Golden
                 return;
             }
 
-            var d = n as Dec;
-            if (d != null)
+            if (n is Dec d)
             {
                 AssignPrio(d.Child, ref prio);
             }
@@ -245,7 +282,8 @@ namespace Gorecode.Bt.Tests.Golden
         {
             if (step == "start")
             {
-                m_Pending.Add(new RootSearchReq());
+                // RestartTree: force a root re-evaluation (BehaviorTreeComponent.cpp:472-477).
+                m_Pending = new Req { Kind = ReqKind.Root };
                 return;
             }
 
@@ -284,23 +322,11 @@ namespace Gorecode.Bt.Tests.Golden
                 case "complete":
                 {
                     var parts = arg.Split(':');
-                    Tsk t;
-                    if (!m_Nodes.TryGetValue(parts[0], out var node) || !(node is Tsk))
+                    if (m_Nodes.TryGetValue(parts[0], out var node) && node is Tsk t)
                     {
-                        return;
+                        FinishLatent(t, parts[1], seg);
                     }
 
-                    t = (Tsk)node;
-                    if (t.State != St.Running)
-                    {
-                        return;
-                    }
-
-                    E(seg, t.Id, "finish", parts[1]);
-                    t.State = parts[1] == "Success" ? St.Success : St.Failure;
-                    Disarm(t.TimerId);
-                    t.TimerId = -1;
-                    m_Pending.Add(new ContinueReq { Owner = LinkOwner(t), Idx = LinkIndex(t), Result = parts[1] });
                     return;
                 }
 
@@ -317,147 +343,350 @@ namespace Gorecode.Bt.Tests.Golden
 
         public void Tick(List<string> seg)
         {
-            if (m_Pending.Count == 0)
+            if (m_Pending == null)
             {
                 return;
             }
 
-            var batch = m_Pending;
-            m_Pending = new List<Req>();
-            var rootSearch = batch.Any(r => r is RootSearchReq || r is LowerAbortReq);
-            var stopped = false;
+            var req = m_Pending;
+            m_Pending = null;
+            seg.Add(req.Kind == ReqKind.Root ? "search:root" : "search:" + req.Start.Id);
 
-            // Pass 1: aborts (in request order); a root search in the same batch
-            // supersedes every continuation.
-            foreach (var r in batch)
+            var sr = Search(req, seg);
+            if (!sr.Valid)
             {
-                if (r is StopReq)
-                {
-                    stopped = true;
-                }
-                else if (r is LowerAbortReq la)
-                {
-                    AbortLower(la.D, seg);
-                }
-                else if (r is BranchAbortReq ba)
-                {
-                    bool delayed;
-                    AbortSubtree(ba.D.Child, seg, out delayed);
-                    var cont = new ContinueReq
-                    {
-                        Owner = LinkOwner(ba.D),
-                        Idx = LinkIndex(ba.D),
-                        Result = ba.FailureResult ? "Failure" : "Aborted",
-                    };
-                    if (delayed)
-                    {
-                        foreach (var t in m_DelayedAborts)
-                        {
-                            t.PendingContinue = cont;
-                        }
-                    }
-                    else if (!rootSearch)
-                    {
-                        RunContinue(cont, seg);
-                    }
-                }
-            }
-
-            if (stopped)
-            {
-                DoStop(seg);
-                return;
-            }
-
-            if (rootSearch)
-            {
-                RunRootSearch(seg);
-                return;
-            }
-
-            // Pass 2: deferred continuations and loop iterations.
-            foreach (var r in batch)
-            {
-                if (r is ContinueReq c)
-                {
-                    RunContinue(c, seg);
-                }
-                else if (r is LoopReq l)
-                {
-                    ResumeLoop(l, seg);
-                }
-            }
-        }
-
-        void RunContinue(ContinueReq c, List<string> seg)
-        {
-            seg.Add("search:" + c.Owner.Id);
-            FinishLink(c.Owner, c.Idx, c.Result, seg, false);
-        }
-
-        void RunRootSearch(List<string> seg)
-        {
-            seg.Add("search:root");
-            var buf = new List<string>();
-            var mark = m_Pending.Count;
-            var st = m_Root is Comp ? RunInner(m_Root, buf) : RunLink(m_Root, buf, null);
-            if (st == St.Discarded)
-            {
-                // KeepRunning: the whole search update is rolled back (S49).
-                m_Pending.RemoveRange(mark, m_Pending.Count - mark);
+                Undo(sr.Undo);
                 seg.Add("search:discard");
                 return;
             }
 
-            seg.AddRange(buf);
+            // A search that selects a running KeepRunning task was already discarded;
+            // any other valid search replaces or restarts the current task.
+            if (m_ActiveTask != null)
+            {
+                var current = m_ActiveTask;
+                m_ActiveTask = null;
+                UnregisterFrom(sr.Task);
+                var delayed = AbortTask(current, seg);
+                ResetPathOf(current);
+                if (delayed)
+                {
+                    // Latent abort: the tree keeps its state until the abort finishes,
+                    // then the same request is searched again.
+                    Undo(sr.Undo);
+                    m_AbortInProgress = true;
+                    m_Deferred = req;
+                    return;
+                }
+            }
+
+            Commit(sr.Undo);
+            foreach (var completion in sr.Completions)
+            {
+                if (completion.Node.State == St.Running)
+                {
+                    E(seg, completion.Node.Id, "complete", completion.Result);
+                }
+
+                completion.Node.State = Map(completion.Result);
+                completion.Node.ActiveIndex = k_None;
+            }
+
+            if (sr.Task == null)
+            {
+                OnExhausted();
+                return;
+            }
+
+            ResetNotOnPath(sr.Path, sr.Task);
+            for (var i = 0; i < sr.Path.Count; i++)
+            {
+                sr.Path[i].ActiveIndex = sr.PathIdx[i];
+            }
+
+            ExecuteTask(sr.Task, seg);
+        }
+
+        // ---------------------------------------------------------------- search (finds a task, executes nothing)
+
+        SearchResult Search(Req req, List<string> seg)
+        {
+            var sr = new SearchResult();
+            var cur = req.Kind == ReqKind.Root ? m_RootComp : req.Start;
+            if (cur == null || (req.Kind != ReqKind.Root && cur.State != St.Running))
+            {
+                sr.Task = null;
+                return sr;
+            }
+
+            var idx = k_None;
+            string last = null;
+            var bounded = req.Kind == ReqKind.BranchStart;
+            var first = true;
+            Enter(cur, seg, sr);
+
+            while (true)
+            {
+                int next;
+                bool viaOverride;
+                if (first && req.Kind == ReqKind.Continue)
+                {
+                    // Leaving child req.ChildIdx with req.Result (NotifyDecoratorsOnDeactivation).
+                    last = ProcessDeactivation(cur, req.ChildIdx, req.Result, sr.Undo);
+                    idx = req.ChildIdx;
+                    next = NextChild(cur, idx, last, out viaOverride);
+                }
+                else if (first && bounded)
+                {
+                    // The search begins at the decorated branch and is limited to it.
+                    next = req.ChildIdx;
+                    viaOverride = false;
+                }
+                else
+                {
+                    next = NextChild(cur, idx, last, out viaOverride);
+                }
+
+                first = false;
+                if (next == k_NoChild)
+                {
+                    // The composite ends with the result that ended it (selector: a child's
+                    // success; sequence: a child's failure), or with its default when it ran
+                    // out of children.
+                    var compositeResult = last ?? (cur.Type == "Selector" ? "Failure" : "Success");
+                    sr.Completions.Add(new Completion { Node = cur, Result = compositeResult });
+                    var parent = LinkOwner(cur);
+                    if (parent == null)
+                    {
+                        sr.Task = null;
+                        return sr;
+                    }
+
+                    var linkIdx = LinkIndex(cur);
+                    last = ProcessDeactivation(parent, linkIdx, compositeResult, sr.Undo);
+                    idx = linkIdx;
+                    cur = parent;
+                    bounded = false;
+                    continue;
+                }
+
+                if (!EntryChecks(cur, next, seg))
+                {
+                    idx = next;
+                    last = "Failure";
+                    NotifyFailedActivation(cur, next, sr.Undo);
+                    if (bounded)
+                    {
+                        // Nothing executable inside the requested range.
+                        sr.Task = null;
+                        return sr;
+                    }
+
+                    continue;
+                }
+
+                NotifyActivation(cur, next, viaOverride, sr.Undo);
+                sr.Path.Add(cur);
+                sr.PathIdx.Add(next);
+                if (Inner(cur.Children[next]) is Tsk task)
+                {
+                    sr.Task = task;
+                    break;
+                }
+
+                cur = (Comp)Inner(cur.Children[next]);
+                Enter(cur, seg, sr);
+                idx = k_None;
+                last = null;
+                bounded = false;
+            }
+
+            // "Task doesn't allow restart and it's already running! Discarding search."
+            if (sr.Task == m_ActiveTask && sr.Task.KeepRunning)
+            {
+                sr.Valid = false;
+            }
+
+            return sr;
+        }
+
+        int NextChild(Comp cur, int lastChildIdx, string lastResult, out bool viaOverride)
+        {
+            viaOverride = false;
+            if (cur.OverrideChild != k_None)
+            {
+                viaOverride = true;
+                var overridden = cur.OverrideChild;
+                cur.OverrideChild = k_None;
+                return overridden;
+            }
+
+            if (lastChildIdx == k_None)
+            {
+                return cur.Children.Count > 0 ? 0 : k_NoChild;
+            }
+
+            var isSelector = cur.Type == "Selector";
+            var succeeded = lastResult == "Success";
+            if (isSelector ? succeeded : !succeeded)
+            {
+                return k_NoChild; // selector done on success, sequence done on failure
+            }
+
+            return lastChildIdx + 1 < cur.Children.Count ? lastChildIdx + 1 : k_NoChild;
+        }
+
+        bool EntryChecks(Comp owner, int childIdx, List<string> seg)
+        {
+            foreach (var d in DecoratorChain(owner.Children[childIdx]))
+            {
+                bool pass;
+                switch (d.Type)
+                {
+                    case "BlackboardDecorator":
+                        pass = Eval(d);
+                        d.LastResult = pass;
+                        break;
+                    case "CooldownDecorator":
+                        pass = m_Clock >= d.LastExit + d.Seconds - 1e-9;
+                        break;
+                    default:
+                        pass = true;
+                        break;
+                }
+
+                E(seg, d.Id, pass ? "pass" : "fail");
+                if (!pass)
+                {
+                    return false; // attachment order with short-circuit (BTCompositeNode.cpp:454-478)
+                }
+            }
+
+            return true;
+        }
+
+        void NotifyActivation(Comp owner, int childIdx, bool viaOverride, List<Action> undo)
+        {
+            foreach (var d in DecoratorChain(owner.Children[childIdx]))
+            {
+                switch (d.Type)
+                {
+                    case "BlackboardDecorator":
+                        if (d.AbortSelf)
+                        {
+                            Arm(d, undo); // Self / Both
+                        }
+
+                        if (d.AbortLower && !d.AbortSelf)
+                        {
+                            Disarm(d, undo); // LowerPriority
+                        }
+
+                        break;
+                    case "TimeLimitDecorator":
+                    {
+                        var saved = d.TimerId;
+                        var id = -1;
+                        id = AddTimer(m_Clock + d.Seconds, s =>
+                        {
+                            if (d.TimerId == id)
+                            {
+                                Queue(new Req { Kind = ReqKind.Continue, Start = LinkOwner(d), ChildIdx = LinkIndex(d), Result = "Failure" });
+                            }
+                        });
+                        d.TimerId = id;
+                        undo.Add(() => { Disarm(id); d.TimerId = saved; });
+                        break;
+                    }
+
+                    case "LoopDecorator":
+                    {
+                        var savedRemaining = d.Remaining;
+                        var savedStarted = d.StartedAt;
+                        var savedOverride = owner.OverrideChild;
+                        if (!viaOverride)
+                        {
+                            d.Remaining = d.Count;
+                            d.StartedAt = m_Clock;
+                        }
+
+                        d.Remaining--;
+                        var shouldLoop = d.Mode == "Infinite"
+                            ? d.Timeout < 0 || m_Clock < d.StartedAt + d.Timeout - 1e-9
+                            : d.Remaining > 0;
+                        if (shouldLoop)
+                        {
+                            owner.OverrideChild = childIdx;
+                        }
+
+                        undo.Add(() => { d.Remaining = savedRemaining; d.StartedAt = savedStarted; owner.OverrideChild = savedOverride; });
+                        break;
+                    }
+                }
+            }
+        }
+
+        void NotifyFailedActivation(Comp owner, int childIdx, List<Action> undo)
+        {
+            foreach (var d in DecoratorChain(owner.Children[childIdx]))
+            {
+                if (d.Type == "BlackboardDecorator" && d.AbortLower)
+                {
+                    Arm(d, undo); // LowerPriority / Both
+                }
+            }
+        }
+
+        /// <summary>Regular deactivation of a child link; returns the result after decorator processing.</summary>
+        string ProcessDeactivation(Comp owner, int childIdx, string result, List<Action> undo)
+        {
+            foreach (var d in DecoratorChain(owner.Children[childIdx]))
+            {
+                switch (d.Type)
+                {
+                    case "ForceResultDecorator":
+                        if (result == "Failure" && d.ForceResult == "Success")
+                        {
+                            result = "Success";
+                        }
+
+                        break;
+                    case "CooldownDecorator":
+                    {
+                        var saved = d.LastExit;
+                        d.LastExit = m_Clock;
+                        undo.Add(() => d.LastExit = saved);
+                        break;
+                    }
+
+                    case "TimeLimitDecorator":
+                    {
+                        var saved = d.TimerId;
+                        Disarm(d);
+                        undo.Add(() => d.TimerId = saved);
+                        break;
+                    }
+
+                    case "BlackboardDecorator":
+                        if (d.AbortSelf && !d.AbortLower)
+                        {
+                            Disarm(d, undo); // Self observers are out of scope once the branch is left
+                        }
+                        else if (d.AbortLower && !d.AbortSelf)
+                        {
+                            Arm(d, undo); // LowerPriority observers re-arm when their branch is left
+                        }
+
+                        break;
+                }
+            }
+
+            return result;
         }
 
         // ---------------------------------------------------------------- execution
 
-        St RunInner(N node, List<string> seg)
-        {
-            if (node is Comp c)
-            {
-                var reenter = c.State == St.Running;
-                if (!reenter)
-                {
-                    E(seg, c.Id, "activate");
-                    c.State = St.Running;
-                    RegisterObservers(c);
-                }
-
-                return RunChildAndFinish(c, 0, seg, reenter);
-            }
-
-            var t = (Tsk)node;
-            if (t.Type == "InstantTask")
-            {
-                Activate(t, seg);
-                E(seg, t.Id, "finish", t.Result);
-                return t.Result == "Success" ? St.Success : St.Failure;
-            }
-
-            if (t.State == St.Running)
-            {
-                if (t.KeepRunning)
-                {
-                    return St.Discarded;
-                }
-
-                AbortTask(t, seg, true);
-            }
-
-            Activate(t, seg);
-            t.State = St.Running;
-            if (t.Duration > 0)
-            {
-                t.TimerId = AddTimer(m_Clock + t.Duration, s => LatentTimerFired(t, s));
-            }
-
-            return St.Running;
-        }
-
-        void Activate(Tsk t, List<string> seg)
+        void ExecuteTask(Tsk t, List<string> seg)
         {
             E(seg, t.Id, "activate");
             if (t.CountActivations)
@@ -466,382 +695,219 @@ namespace Gorecode.Bt.Tests.Golden
                 E(seg, t.Id, "count", t.Activations.ToString(CultureInfo.InvariantCulture));
             }
 
-            if (t.Writes == null)
+            if (t.Writes != null)
+            {
+                foreach (var kv in t.Writes)
+                {
+                    Write(kv.Key, kv.Value, seg);
+                }
+            }
+
+            if (t.Type == "InstantTask")
+            {
+                E(seg, t.Id, "finish", t.Result);
+                t.State = Map(t.Result);
+                Queue(new Req { Kind = ReqKind.Continue, Start = LinkOwner(t), ChildIdx = LinkIndex(t), Result = t.Result });
+                return;
+            }
+
+            t.State = St.Running;
+            m_ActiveTask = t;
+            if (t.Duration > 0)
+            {
+                var id = -1;
+                id = AddTimer(m_Clock + t.Duration, s => FinishLatent(t, t.Result, s));
+                t.TimerId = id;
+            }
+        }
+
+        void FinishLatent(Tsk t, string result, List<string> seg)
+        {
+            if (m_ActiveTask != t)
             {
                 return;
             }
 
-            foreach (var kv in t.Writes)
-            {
-                Write(kv.Key, kv.Value, seg);
-            }
+            E(seg, t.Id, "finish", result);
+            t.State = Map(result);
+            m_ActiveTask = null;
+            Disarm(t.TimerId);
+            t.TimerId = -1;
+            Queue(new Req { Kind = ReqKind.Continue, Start = LinkOwner(t), ChildIdx = LinkIndex(t), Result = result });
         }
 
-        St RunChildAndFinish(Comp owner, int idx, List<string> seg, bool reenter)
-        {
-            var child = owner.Children[idx];
-            var st = RunLink(child, seg, () =>
-            {
-                if (reenter && owner.ActiveIndex >= 0 && owner.ActiveIndex != idx)
-                {
-                    AbortSubtree(owner.Children[owner.ActiveIndex], seg, out _);
-                    owner.ActiveIndex = -1;
-                }
-            });
-            if (st == St.Running)
-            {
-                owner.ActiveIndex = idx;
-                return St.Running;
-            }
-
-            if (st == St.Discarded)
-            {
-                return St.Discarded;
-            }
-
-            if (reenter && owner.ActiveIndex == idx)
-            {
-                // The running child no longer passes its entry check: its active
-                // nodes are aborted as part of the re-entry.
-                AbortSubtree(child, seg, out _);
-                owner.ActiveIndex = -1;
-            }
-
-            return FinishLink(owner, idx, st == St.Success ? "Success" : "Failure", seg, reenter);
-        }
-
-        St RunLink(N node, List<string> seg, Action beforeRun)
-        {
-            var chain = new List<Dec>();
-            for (var n = node; n is Dec; n = ((Dec)n).Child)
-            {
-                chain.Add((Dec)n);
-            }
-
-            var inner = chain.Count > 0 ? chain[chain.Count - 1].Child : node;
-            foreach (var d in chain)
-            {
-                if (!EntryCheck(d, seg))
-                {
-                    return St.Failure;
-                }
-            }
-
-            if (beforeRun != null)
-            {
-                beforeRun();
-            }
-
-            return RunInner(inner, seg);
-        }
-
-        bool EntryCheck(Dec d, List<string> seg)
-        {
-            bool r;
-            switch (d.Type)
-            {
-                case "BlackboardDecorator":
-                    r = Eval(d);
-                    d.LastResult = r;
-                    break;
-                case "CooldownDecorator":
-                    r = m_Clock >= d.LastExit + d.Seconds - 1e-9;
-                    break;
-                case "TimeLimitDecorator":
-                    r = true;
-                    if (d.TimerId == -1)
-                    {
-                        var id = -1;
-                        id = AddTimer(m_Clock + d.Seconds, s =>
-                        {
-                            if (d.TimerId == id)
-                            {
-                                m_Pending.Add(new BranchAbortReq { D = d, FailureResult = true });
-                            }
-                        });
-                        d.TimerId = id;
-                    }
-
-                    break;
-                case "LoopDecorator":
-                    r = true;
-                    d.Iterations = 0;
-                    d.StartedAt = m_Clock;
-                    break;
-                default:
-                    r = true;
-                    break;
-            }
-
-            E(seg, d.Id, r ? "pass" : "fail");
-            return r;
-        }
-
-        bool ShouldLoop(Dec d)
-        {
-            if (d.Mode == "Infinite")
-            {
-                return d.Timeout < 0 || m_Clock < d.StartedAt + d.Timeout - 1e-9;
-            }
-
-            return d.Iterations < d.Count;
-        }
-
-        St FinishLink(Comp owner, int idx, string result, List<string> seg, bool reenter)
-        {
-            if (owner.State != St.Running)
-            {
-                return St.Idle;
-            }
-
-            var chain = new List<Dec>();
-            for (var n = owner.Children[idx]; n is Dec; n = ((Dec)n).Child)
-            {
-                chain.Add((Dec)n);
-            }
-
-            if (result == "Aborted")
-            {
-                // Aborted results pass decorators through untouched (S25).
-                foreach (var d in chain)
-                {
-                    if (d.Type == "TimeLimitDecorator")
-                    {
-                        Disarm(d);
-                    }
-                }
-            }
-            else
-            {
-                for (var i = chain.Count - 1; i >= 0; i--)
-                {
-                    var d = chain[i];
-                    if (d.Type == "LoopDecorator")
-                    {
-                        d.Iterations++;
-                        if (ShouldLoop(d))
-                        {
-                            owner.ActiveIndex = idx;
-                            m_Pending.Add(new LoopReq { D = d, Chain = chain, I = i, Owner = owner, Idx = idx });
-                            return St.Running;
-                        }
-                    }
-                    else if (d.Type == "ForceResultDecorator")
-                    {
-                        if (result == "Failure" && d.ForceResult == "Success")
-                        {
-                            result = "Success";
-                        }
-                    }
-                    else if (d.Type == "CooldownDecorator")
-                    {
-                        d.LastExit = m_Clock;
-                    }
-                    else if (d.Type == "TimeLimitDecorator")
-                    {
-                        Disarm(d);
-                    }
-                }
-            }
-
-            return AdvanceComposite(owner, idx, result, seg, reenter);
-        }
-
-        St AdvanceComposite(Comp owner, int idx, string result, List<string> seg, bool reenter)
-        {
-            owner.ActiveIndex = -1;
-            if (result == "Aborted")
-            {
-                result = "Failure";
-            }
-
-            var isSelector = owner.Type == "Selector";
-            if (isSelector ? result == "Success" : result == "Failure")
-            {
-                return CompleteComposite(owner, result, seg);
-            }
-
-            var next = idx + 1;
-            if (next >= owner.Children.Count)
-            {
-                return CompleteComposite(owner, isSelector ? "Failure" : "Success", seg);
-            }
-
-            return RunChildAndFinish(owner, next, seg, reenter);
-        }
-
-        St CompleteComposite(Comp owner, string result, List<string> seg)
-        {
-            E(seg, owner.Id, "complete", result);
-            owner.State = result == "Success" ? St.Success : St.Failure;
-            var linkOwner = LinkOwner(owner);
-            if (linkOwner == null)
-            {
-                return owner.State;
-            }
-
-            return FinishLink(linkOwner, LinkIndex(owner), result, seg, false);
-        }
-
-        void ResumeLoop(LoopReq l, List<string> seg)
-        {
-            var st = RunLink(l.D.Child, seg, null);
-            if (st != St.Success && st != St.Failure)
-            {
-                return;
-            }
-
-            var result = st == St.Success ? "Success" : "Failure";
-            l.D.Iterations++;
-            if (ShouldLoop(l.D))
-            {
-                m_Pending.Add(l);
-                return;
-            }
-
-            for (var i = l.I - 1; i >= 0; i--)
-            {
-                var d = l.Chain[i];
-                if (d.Type == "ForceResultDecorator")
-                {
-                    if (result == "Failure" && d.ForceResult == "Success")
-                    {
-                        result = "Success";
-                    }
-                }
-                else if (d.Type == "CooldownDecorator")
-                {
-                    d.LastExit = m_Clock;
-                }
-                else if (d.Type == "TimeLimitDecorator")
-                {
-                    Disarm(d);
-                }
-            }
-
-            AdvanceComposite(l.Owner, l.Idx, result, seg, false);
-        }
-
-        // ---------------------------------------------------------------- aborts
-
-        void AbortSubtree(N n, List<string> seg, out bool delayed)
-        {
-            m_DelayedAborts.Clear();
-            AbortVisit(n, seg);
-            delayed = m_DelayedAborts.Count > 0;
-        }
-
-        void AbortVisit(N n, List<string> seg)
-        {
-            if (n is Tsk t)
-            {
-                if (t.State == St.Running)
-                {
-                    AbortTask(t, seg, false);
-                }
-
-                return;
-            }
-
-            if (n is Comp c)
-            {
-                if (c.State == St.Running)
-                {
-                    foreach (var child in c.Children)
-                    {
-                        AbortVisit(child, seg);
-                    }
-
-                    c.State = St.Idle;
-                    c.ActiveIndex = -1;
-                }
-
-                return;
-            }
-
-            var d = (Dec)n;
-            AbortVisit(d.Child, seg);
-            if (d.Type == "TimeLimitDecorator")
-            {
-                Disarm(d);
-            }
-            else if (d.Type == "CooldownDecorator")
-            {
-                d.LastExit = m_Clock;
-            }
-            else if (d.Type == "LoopDecorator")
-            {
-                d.Iterations = 0;
-            }
-        }
-
-        void AbortTask(Tsk t, List<string> seg, bool immediate)
+        /// <summary>Aborts a task; returns true when the abort is latent (completes later).</summary>
+        bool AbortTask(Tsk t, List<string> seg)
         {
             E(seg, t.Id, "abort");
             Disarm(t.TimerId);
             t.TimerId = -1;
-            if (!immediate && t.AbortDelay > 0)
+            if (t.AbortDelay > 0)
             {
-                t.State = St.Idle;
-                m_DelayedAborts.Add(t);
                 AddTimer(m_Clock + t.AbortDelay, s =>
                 {
                     E(s, t.Id, "finish", "Aborted");
-                    if (t.PendingContinue != null)
+                    t.State = St.Idle;
+                    m_AbortInProgress = false;
+                    if (m_Deferred != null)
                     {
-                        m_Pending.Add(t.PendingContinue);
-                        t.PendingContinue = null;
+                        m_Pending = m_Deferred;
+                        m_Deferred = null;
                     }
                 });
-                return;
+                return true;
             }
 
             E(seg, t.Id, "finish", "Aborted");
             t.State = St.Idle;
+            return false;
         }
 
-        void AbortLower(Dec d, List<string> seg)
+        void OnExhausted()
         {
-            foreach (var n in m_Nodes.Values.OrderBy(x => x.Prio).ToList())
+            // Ran out of nodes: every auxiliary node is unregistered; looped mode
+            // re-requests a root search for the next update (BehaviorTreeComponent.cpp:585-613).
+            m_Armed.Clear();
+            foreach (var n in m_Nodes.Values.OfType<Comp>())
             {
-                if (n.State != St.Running || n.Prio <= d.Child.Prio)
-                {
-                    continue;
-                }
+                n.State = St.Idle;
+                n.ActiveIndex = k_None;
+                n.OverrideChild = k_None;
+            }
 
-                if (n is Tsk t)
-                {
-                    AbortTask(t, seg, true);
-                }
-                else if (n is Comp c)
-                {
-                    c.State = St.Idle;
-                    c.ActiveIndex = -1;
-                }
+            if (m_Looped)
+            {
+                m_Pending = new Req { Kind = ReqKind.Root };
             }
         }
 
         void DoStop(List<string> seg)
         {
-            foreach (var n in m_Nodes.Values.OrderBy(x => x.Prio).ToList())
+            if (m_ActiveTask != null)
             {
-                if (n is Tsk t && t.State == St.Running)
-                {
-                    AbortTask(t, seg, true);
-                }
-                else if (n is Comp c && c.State == St.Running)
-                {
-                    c.State = St.Idle;
-                    c.ActiveIndex = -1;
-                }
+                AbortTask(m_ActiveTask, seg);
+                m_ActiveTask = null;
+            }
+
+            foreach (var n in m_Nodes.Values.OfType<Comp>())
+            {
+                n.State = St.Idle;
+                n.ActiveIndex = k_None;
+                n.OverrideChild = k_None;
             }
 
             m_Timers.Clear();
-            m_Observers.Clear();
-            m_Pending.Clear();
+            m_Armed.Clear();
+            m_Pending = null;
+            m_Deferred = null;
+            m_AbortInProgress = false;
         }
 
-        // ---------------------------------------------------------------- blackboard & observers
+        // ---------------------------------------------------------------- observers
+
+        void Notify(string key, List<string> seg)
+        {
+            foreach (var d in m_Armed.ToList())
+            {
+                if (d.Type != "BlackboardDecorator" || d.Key != key)
+                {
+                    continue;
+                }
+
+                var pass = Eval(d);
+                if (!d.OnValueChange && pass == d.LastResult)
+                {
+                    continue; // OnResultChange: request only when the result flips
+                }
+
+                E(seg, d.Id, "observe");
+                E(seg, d.Id, pass ? "pass" : "fail");
+                d.LastResult = pass;
+
+                var owner = LinkOwner(d);
+                if (owner == null)
+                {
+                    continue;
+                }
+
+                var executing = m_ActiveTask != null && IsUnder(d.Child, m_ActiveTask);
+                if (!pass)
+                {
+                    if (executing)
+                    {
+                        // RequestBranchDeactivation: the parent continues with a failed child.
+                        Queue(new Req { Kind = ReqKind.Continue, Start = owner, ChildIdx = LinkIndex(d), Result = "Failure" });
+                    }
+                }
+                else if (!executing || d.OnValueChange)
+                {
+                    // RequestBranchActivation: a search limited to the decorated branch; with
+                    // OnValueChange it also restarts an executing branch.
+                    Queue(new Req { Kind = ReqKind.BranchStart, Start = owner, ChildIdx = LinkIndex(d) });
+                }
+            }
+        }
+
+        /// <summary>A pending request of higher priority wins; the new one is skipped (BehaviorTreeComponent.cpp:1256-1281).</summary>
+        void Queue(Req req)
+        {
+            if (m_Pending != null && Key(m_Pending) < Key(req))
+            {
+                return;
+            }
+
+            m_Pending = req;
+        }
+
+        static long Key(Req req)
+        {
+            return req.Kind == ReqKind.Root ? long.MinValue : ((long)req.Start.Prio << 20) + Math.Max(req.ChildIdx, 0);
+        }
+
+        /// <summary>Unregisters observers at or below the new task's position (UnregisterAuxNodesUpTo).</summary>
+        void UnregisterFrom(Tsk newTask)
+        {
+            if (newTask == null)
+            {
+                m_Armed.Clear();
+                return;
+            }
+
+            var keep = new HashSet<Dec>(DecoratorChain(LinkRoot(newTask)));
+            var limit = LinkRoot(newTask).Prio;
+            for (var i = m_Armed.Count - 1; i >= 0; i--)
+            {
+                if (m_Armed[i].Prio > limit && !keep.Contains(m_Armed[i]))
+                {
+                    m_Armed.RemoveAt(i);
+                }
+            }
+        }
+
+        void Arm(Dec d, List<Action> undo)
+        {
+            if (m_Armed.Contains(d))
+            {
+                return;
+            }
+
+            m_Armed.Add(d);
+            undo.Add(() => m_Armed.Remove(d));
+        }
+
+        void Disarm(Dec d, List<Action> undo)
+        {
+            var index = m_Armed.IndexOf(d);
+            if (index < 0)
+            {
+                return;
+            }
+
+            m_Armed.RemoveAt(index);
+            undo.Add(() => m_Armed.Insert(Math.Min(index, m_Armed.Count), d));
+        }
+
+        // ---------------------------------------------------------------- blackboard
 
         bool Eval(Dec d)
         {
@@ -908,88 +974,31 @@ namespace Gorecode.Bt.Tests.Golden
             }
         }
 
-        void Notify(string key, List<string> seg)
-        {
-            foreach (var d in m_Observers.ToList())
-            {
-                if (d.Key != key)
-                {
-                    continue;
-                }
-
-                var newResult = Eval(d);
-                if (!d.OnValueChange && newResult == d.LastResult)
-                {
-                    continue; // OnResultChange: re-evaluate only when the result flips
-                }
-
-                E(seg, d.Id, "observe");
-                E(seg, d.Id, newResult ? "pass" : "fail");
-                d.LastResult = newResult;
-                if (d.AbortSelf && !newResult && HasActive(d.Child))
-                {
-                    m_Pending.Add(new BranchAbortReq { D = d });
-                }
-
-                if (d.AbortLower && newResult)
-                {
-                    m_Pending.Add(new LowerAbortReq { D = d });
-                }
-            }
-        }
-
-        void RegisterObservers(Comp c)
-        {
-            foreach (var child in c.Children)
-            {
-                for (var n = child; n is Dec; n = ((Dec)n).Child)
-                {
-                    var d = (Dec)n;
-                    if (d.Type == "BlackboardDecorator" && (d.AbortSelf || d.AbortLower) && !m_Observers.Contains(d))
-                    {
-                        d.LastResult = Eval(d);
-                        m_Observers.Add(d);
-                    }
-                }
-            }
-        }
-
-        bool HasActive(N n)
-        {
-            if (n.State == St.Running)
-            {
-                return true;
-            }
-
-            if (n is Dec d)
-            {
-                return HasActive(d.Child);
-            }
-
-            if (n is Comp c)
-            {
-                return c.Children.Any(HasActive);
-            }
-
-            return false;
-        }
-
         // ---------------------------------------------------------------- helpers
 
-        Comp LinkOwner(N n)
+        static List<Dec> DecoratorChain(N link)
         {
-            for (var c = n; c.Parent != null; c = c.Parent)
+            var chain = new List<Dec>();
+            for (var n = link; n is Dec; n = ((Dec)n).Child)
             {
-                if (c.Parent is Comp owner)
-                {
-                    return owner;
-                }
+                chain.Add((Dec)n);
             }
 
-            return null;
+            return chain;
         }
 
-        int LinkIndex(N n)
+        static N Inner(N link)
+        {
+            var n = link;
+            while (n is Dec d)
+            {
+                n = d.Child;
+            }
+
+            return n;
+        }
+
+        static N LinkRoot(N n)
         {
             var link = n;
             while (link.Parent != null && !(link.Parent is Comp))
@@ -997,20 +1006,94 @@ namespace Gorecode.Bt.Tests.Golden
                 link = link.Parent;
             }
 
+            return link;
+        }
+
+        static Comp LinkOwner(N n)
+        {
+            return LinkRoot(n).Parent as Comp;
+        }
+
+        static int LinkIndex(N n)
+        {
+            var link = LinkRoot(n);
             return ((Comp)link.Parent).Children.IndexOf(link);
         }
 
-        void LatentTimerFired(Tsk t, List<string> seg)
+        void ResetPathOf(Tsk t)
         {
-            if (t.State != St.Running)
+            for (var n = t.Parent; n != null; n = n.Parent)
+            {
+                if (n is Comp c)
+                {
+                    c.ActiveIndex = k_None;
+                }
+            }
+        }
+
+        void ResetNotOnPath(List<Comp> path, Tsk task)
+        {
+            var keep = new HashSet<Comp>(path);
+            for (var n = (N)task; n != null; n = n.Parent)
+            {
+                if (n is Comp ancestor)
+                {
+                    keep.Add(ancestor);
+                }
+            }
+
+            foreach (var c in m_Nodes.Values.OfType<Comp>())
+            {
+                if (c.State == St.Running && !keep.Contains(c))
+                {
+                    c.State = St.Idle;
+                    c.ActiveIndex = k_None;
+                }
+            }
+        }
+
+        /// <summary>A search entering a composite activates it: UE calls OnNodeActivation while searching.</summary>
+        static void Enter(Comp c, List<string> seg, SearchResult sr)
+        {
+            if (c.State == St.Running)
             {
                 return;
             }
 
-            E(seg, t.Id, "finish", t.Result);
-            t.State = t.Result == "Success" ? St.Success : St.Failure;
-            t.TimerId = -1;
-            m_Pending.Add(new ContinueReq { Owner = LinkOwner(t), Idx = LinkIndex(t), Result = t.Result });
+            E(seg, c.Id, "activate");
+            c.State = St.Running;
+            sr.Undo.Add(() => c.State = St.Idle);
+        }
+
+        static bool IsUnder(N ancestor, N node)
+        {
+            for (var n = node; n != null; n = n.Parent)
+            {
+                if (n == ancestor)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        static St Map(string result)
+        {
+            return result == "Success" ? St.Success : St.Failure;
+        }
+
+        static void Undo(List<Action> undo)
+        {
+            for (var i = undo.Count - 1; i >= 0; i--)
+            {
+                undo[i]();
+            }
+        }
+
+        static void Commit(List<Action> undo)
+        {
+            undo.Clear();
         }
 
         int AddTimer(double due, Action<List<string>> act)
@@ -1022,12 +1105,10 @@ namespace Gorecode.Bt.Tests.Golden
 
         void Disarm(int timerId)
         {
-            if (timerId < 0)
+            if (timerId >= 0)
             {
-                return;
+                m_Timers.RemoveAll(t => t.Id == timerId);
             }
-
-            m_Timers.RemoveAll(t => t.Id == timerId);
         }
 
         void Disarm(Dec d)

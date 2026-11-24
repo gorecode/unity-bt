@@ -1,4 +1,5 @@
 {
+  "schema": "unity-bt.golden/1",
   "scenarios": [
     {
       "id": "S39-subtree-runs-inline",
@@ -19,9 +20,12 @@
           "b": { "type": "InstantTask", "result": "Success" }
         }
       },
-      "stimulus": ["start", "tick"],
+      "stimulus": ["start", "settle"],
       "expected": { "updates": [
-        ["search:root", "seq.activate", "sub.activate", "sub/inner.activate", "sub/x.activate", "sub/x.finish:Success", "sub/inner.complete:Success", "sub.finish:Success", "b.activate", "b.finish:Success", "seq.complete:Success"]
+        ["search:root", "seq.activate", "sub.activate", "sub/inner.activate", "sub/x.activate", "sub/x.finish:Success"],
+        ["search:sub/inner", "sub/inner.complete:Success", "sub.finish:Success"],
+        ["search:seq", "b.activate", "b.finish:Success"],
+        ["search:seq", "seq.complete:Success"]
       ]}
     },
     {
@@ -46,9 +50,12 @@
           "b": { "type": "InstantTask", "result": "Success" }
         }
       },
-      "stimulus": ["inject:patrol:patrolA", "start", "tick"],
+      "stimulus": ["inject:patrol:patrolA", "start", "settle"],
       "expected": { "updates": [
-        ["search:root", "seq.activate", "dyn.activate", "patrolA/inner.activate", "patrolA/x.activate", "patrolA/x.finish:Success", "patrolA/inner.complete:Success", "dyn.finish:Success", "b.activate", "b.finish:Success", "seq.complete:Success"]
+        ["search:root", "seq.activate", "dyn.activate", "patrolA/inner.activate", "patrolA/x.activate", "patrolA/x.finish:Success"],
+        ["search:patrolA/inner", "patrolA/inner.complete:Success", "dyn.finish:Success"],
+        ["search:seq", "b.activate", "b.finish:Success"],
+        ["search:seq", "seq.complete:Success"]
       ]}
     },
     {
@@ -80,10 +87,13 @@
           "b": { "type": "InstantTask", "result": "Success" }
         }
       },
-      "stimulus": ["start", "tick", "inject:patrol:patrolA", "tick"],
+      "stimulus": ["start", "tick", "inject:patrol:patrolA", "tick", "settle"],
       "expected": { "updates": [
         ["search:root", "seq.activate", "dyn.activate", "idleTree/inner.activate", "idleTree/w.activate"],
-        ["idleTree/w.abort", "idleTree/w.finish:Aborted", "patrolA/x.activate", "patrolA/x.finish:Success", "patrolA/inner.complete:Success", "dyn.finish:Success", "b.activate", "b.finish:Success", "seq.complete:Success"]
+        ["idleTree/w.abort", "idleTree/w.finish:Aborted", "dyn.finish:Aborted", "dyn.activate", "patrolA/inner.activate", "patrolA/x.activate", "patrolA/x.finish:Success"],
+        ["search:patrolA/inner", "patrolA/inner.complete:Success", "dyn.finish:Success"],
+        ["search:seq", "b.activate", "b.finish:Success"],
+        ["search:seq", "seq.complete:Success"]
       ]}
     },
     {
@@ -126,11 +136,11 @@
         }
       },
       "blackboard": { "K": 1 },
-      "stimulus": ["start", "tick", "clear:K", "tick"],
+      "stimulus": ["start", "tick", "clear:K", "tick", "settle"],
       "expected": { "updates": [
         ["search:root", "seq.activate", "sub#rg.pass", "sub.activate", "sub/inner.activate", "sub/w.activate"],
         ["bb.clear:K", "sub#rg.observe", "sub#rg.fail"],
-        ["sub/w.abort", "sub/w.finish:Aborted", "search:seq", "seq.complete:Failure"]
+        ["search:seq", "sub/w.abort", "sub/w.finish:Aborted", "sub.finish:Aborted", "seq.complete:Failure"]
       ]}
     },
     {
@@ -153,16 +163,21 @@
           "c": { "type": "InstantTask", "result": "Success" }
         }
       },
-      "stimulus": ["start", "tick"],
+      "stimulus": ["start", "settle"],
       "expected": { "updates": [
-        ["search:root", "seq.activate", "sub.activate", "sub/inner.activate", "sub/x.activate", "bb.write:K=1", "sub/x.finish:Success", "sub/inner.complete:Success", "sub.finish:Success", "g.pass", "c.activate", "c.finish:Success", "seq.complete:Success"]
+        ["search:root", "seq.activate", "sub.activate", "sub/inner.activate", "sub/x.activate", "bb.write:K=1", "sub/x.finish:Success"],
+        ["search:sub/inner", "sub/inner.complete:Success", "sub.finish:Success"],
+        ["search:seq", "g.pass", "c.activate", "c.finish:Success"],
+        ["search:seq", "seq.complete:Success"]
       ]}
     },
     {
-      "id": "S62-idle-but-armed",
-      "title": "When no branch is executable the runner goes idle but its LowerPriority observers stay armed and restart execution",
+      "id": "S62-restart-on-exhaustion",
+      "title": "Looped mode: when a search finds no executable branch every auxiliary node is unregistered and the tree re-searches from the root on the next update",
       "statements": ["S62"],
-      "requires": ["selector", "instantTask", "blackboard", "blackboardDecorator", "observerAbort.lowerPriority"],
+      "requires": ["selector", "instantTask", "blackboard", "blackboardDecorator", "observerAbort.lowerPriority", "loopedExecution"],
+      "loop": true,
+      "pendingAtEnd": true,
       "tree": {
         "root": "sel",
         "nodes": {
@@ -173,11 +188,13 @@
           "c": { "type": "InstantTask", "result": "Success" }
         }
       },
-      "stimulus": ["start", "tick", "write:K=1", "tick"],
+      "stimulus": ["start", "tick", "tick", "write:K=1", "tick", "tick"],
       "expected": { "updates": [
         ["search:root", "sel.activate", "g.fail", "g2.fail", "sel.complete:Failure"],
-        ["bb.write:K=1", "g.observe", "g.pass", "g2.observe", "g2.pass"],
-        ["search:root", "sel.activate", "g.pass", "a.activate", "a.finish:Success", "sel.complete:Success"]
+        ["search:root", "sel.activate", "g.fail", "g2.fail", "sel.complete:Failure"],
+        ["bb.write:K=1"],
+        ["search:root", "sel.activate", "g.pass", "a.activate", "a.finish:Success"],
+        ["search:sel", "sel.complete:Success"]
       ]}
     }
   ]

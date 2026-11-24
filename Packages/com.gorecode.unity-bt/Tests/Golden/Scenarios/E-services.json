@@ -1,33 +1,35 @@
 {
+  "schema": "unity-bt.golden/1",
   "scenarios": [
     {
       "id": "S32-service-on-task",
-      "title": "A service attached to a task is active while the task's branch is executed and ticks at its interval",
+      "title": "[V] A service attached to a task is active while the task's branch is executed and ticks at its interval (callback ordering: sandbox S33)",
       "statements": ["S32"],
-      "requires": ["sequence", "latentTask", "service", "timeAdvance"],
+      "requires": ["sequence", "latentTask", "service", "timeAdvance", "verify:S33"],
       "tree": {
         "root": "seq",
         "nodes": {
           "seq": { "type": "Sequence", "children": ["w"] },
-          "w": { "type": "LatentTask", "duration": 2, "services": ["s"] },
+          "w": { "type": "LatentTask", "duration": 2.5, "services": ["s"] },
           "s": { "type": "Service", "interval": 0.5 }
         }
       },
-      "stimulus": ["start", "tick", "advance:0.5", "advance:0.5", "advance:0.5", "advance:0.5", "tick"],
+      "stimulus": ["start", "tick", "advance:0.5", "advance:0.5", "advance:0.5", "advance:0.5", "advance:0.5", "tick", "settle"],
       "expected": { "updates": [
         ["search:root", "seq.activate", "s.activate", "w.activate"],
         ["s.tick"],
         ["s.tick"],
         ["s.tick"],
-        ["w.finish:Success"],
+        ["s.tick"],
+        ["s.tick", "w.finish:Success"],
         ["search:seq", "s.deactivate", "seq.complete:Success"]
       ]}
     },
     {
       "id": "S33-service-restart-timer-on",
-      "title": "Restart Timer on Each Activation: re-activation starts a full new interval",
+      "title": "[V] Restart Timer on Each Activation: re-activation starts a full new interval (callback ordering: sandbox S33)",
       "statements": ["S33"],
-      "requires": ["selector", "sequence", "latentTask", "instantTask", "service", "blackboardDecorator", "observerAbort.self", "timeAdvance"],
+      "requires": ["selector", "sequence", "latentTask", "instantTask", "service", "blackboardDecorator", "observerAbort.self", "timeAdvance", "verify:S33"],
       "tree": {
         "root": "sel",
         "nodes": {
@@ -40,11 +42,12 @@
         }
       },
       "blackboard": { "K": 0 },
-      "stimulus": ["start", "tick", "advance:0.6", "write:K=1", "tick", "write:K=0", "start", "tick", "advance:0.4", "advance:0.6", "advance:0.6", "advance:0.3", "tick"],
+      "stimulus": ["start", "tick", "advance:0.6", "write:K=1", "tick", "settle", "write:K=0", "start", "tick", "advance:0.4", "advance:0.6", "advance:0.5", "tick", "settle"],
       "expected": { "updates": [
         ["search:root", "sel.activate", "g.pass", "seq1.activate", "s.activate", "a.activate"],
         ["bb.write:K=1", "g.observe", "g.fail"],
-        ["a.abort", "a.finish:Aborted", "s.deactivate", "search:sel", "c.activate", "c.finish:Success", "sel.complete:Success"],
+        ["search:sel", "a.abort", "a.finish:Aborted", "s.deactivate", "seq1.complete:Failure", "c.activate", "c.finish:Success"],
+        ["search:sel", "sel.complete:Success"],
         ["bb.write:K=0"],
         ["search:root", "sel.activate", "g.pass", "seq1.activate", "s.activate", "a.activate"],
         [],
@@ -55,9 +58,9 @@
     },
     {
       "id": "S33-service-restart-timer-off",
-      "title": "Without Restart Timer on Each Activation the service keeps its leftover interval time",
+      "title": "[V] Without Restart Timer on Each Activation the service keeps its leftover interval time (callback ordering: sandbox S33)",
       "statements": ["S33"],
-      "requires": ["selector", "sequence", "latentTask", "instantTask", "service", "blackboardDecorator", "observerAbort.self", "timeAdvance"],
+      "requires": ["selector", "sequence", "latentTask", "instantTask", "service", "blackboardDecorator", "observerAbort.self", "timeAdvance", "verify:S33"],
       "tree": {
         "root": "sel",
         "nodes": {
@@ -70,16 +73,17 @@
         }
       },
       "blackboard": { "K": 0 },
-      "stimulus": ["start", "tick", "advance:0.6", "write:K=1", "tick", "write:K=0", "start", "tick", "advance:0.4", "advance:0.6", "advance:0.6", "advance:0.3", "tick"],
+      "stimulus": ["start", "tick", "advance:0.6", "write:K=1", "tick", "settle", "write:K=0", "start", "tick", "advance:0.4", "advance:0.6", "advance:0.5", "tick", "settle"],
       "expected": { "updates": [
         ["search:root", "sel.activate", "g.pass", "seq1.activate", "s.activate", "a.activate"],
         ["bb.write:K=1", "g.observe", "g.fail"],
-        ["a.abort", "a.finish:Aborted", "s.deactivate", "search:sel", "c.activate", "c.finish:Success", "sel.complete:Success"],
+        ["search:sel", "a.abort", "a.finish:Aborted", "s.deactivate", "seq1.complete:Failure", "c.activate", "c.finish:Success"],
+        ["search:sel", "sel.complete:Success"],
         ["bb.write:K=0"],
         ["search:root", "sel.activate", "g.pass", "seq1.activate", "s.activate", "a.activate"],
         ["s.tick"],
         [],
-        ["s.tick", "a.finish:Success"],
+        ["a.finish:Success"],
         ["search:seq1", "s.deactivate", "seq1.complete:Success", "sel.complete:Success"]
       ]}
     },
@@ -87,23 +91,18 @@
       "id": "S53-service-continuous-on-research",
       "title": "[V] A re-search that re-selects the active path neither re-activates services nor resets their timers (sandbox S53)",
       "statements": ["S53"],
-      "requires": ["selector", "sequence", "latentTask", "service", "blackboardDecorator", "observerAbort.lowerPriority", "restartPolicy", "timeAdvance", "verify:S53"],
+      "requires": ["sequence", "latentTask", "service", "restartPolicy", "timeAdvance", "verify:S53"],
       "tree": {
-        "root": "sel",
+        "root": "seq",
         "nodes": {
-          "sel": { "type": "Selector", "children": ["seq1", "g2"] },
-          "seq1": { "type": "Sequence", "children": ["w"], "services": ["s"] },
+          "seq": { "type": "Sequence", "children": ["w"], "services": ["s"] },
           "s": { "type": "Service", "interval": 1 },
-          "w": { "type": "LatentTask", "restartPolicy": "KeepRunning" },
-          "g2": { "type": "BlackboardDecorator", "child": "c", "key": "K", "query": { "op": "eq", "value": 1 }, "abort": "LowerPriority" },
-          "c": { "type": "InstantTask", "result": "Success" }
+          "w": { "type": "LatentTask", "restartPolicy": "KeepRunning" }
         }
       },
-      "blackboard": { "K": 0 },
-      "stimulus": ["start", "tick", "write:K=1", "tick", "advance:1", "tick"],
+      "stimulus": ["start", "tick", "start", "tick", "advance:1", "tick"],
       "expected": { "updates": [
-        ["search:root", "sel.activate", "seq1.activate", "s.activate", "w.activate"],
-        ["bb.write:K=1", "g2.observe", "g2.pass"],
+        ["search:root", "seq.activate", "s.activate", "w.activate"],
         ["search:root", "search:discard"],
         ["s.tick"],
         []

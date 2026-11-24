@@ -48,3 +48,7 @@ the final gate.
   invariant 5).
 - Dev project: Unity CLI (`com.unity.pipeline`) and test framework are dev-tooling
   only, not product dependencies.
+- Tests only: `Newtonsoft.Json` (via Unity's `com.unity.nuget.newtonsoft-json`,
+  a transitive dependency of the dev project) parses the golden scenarios; it is
+  referenced from the test assembly's `precompiledReferences` and ships in no
+  product assembly. Newtonsoft.Json is MIT-licensed.

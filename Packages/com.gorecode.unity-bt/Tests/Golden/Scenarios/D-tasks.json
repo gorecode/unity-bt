@@ -1,4 +1,5 @@
 {
+  "schema": "unity-bt.golden/1",
   "scenarios": [
     {
       "id": "S27-S28-latent-lifecycle",
@@ -12,7 +13,7 @@
           "w": { "type": "LatentTask" }
         }
       },
-      "stimulus": ["start", "tick", "complete:w:Success", "tick"],
+      "stimulus": ["start", "tick", "complete:w:Success", "tick", "settle"],
       "expected": { "updates": [
         ["search:root", "seq.activate", "w.activate"],
         ["w.finish:Success"],
@@ -23,7 +24,7 @@
       "id": "S29-slow-abort-blocks",
       "title": "The tree does not proceed past a task until its asynchronous abort completes",
       "statements": ["S29"],
-      "requires": ["sequence", "latentTask", "blackboardDecorator", "observerAbort.self", "timeAdvance"],
+      "requires": ["sequence", "latentTask", "slowAbort", "blackboardDecorator", "observerAbort.self", "timeAdvance"],
       "tree": {
         "root": "seq",
         "nodes": {
@@ -34,11 +35,11 @@
         }
       },
       "blackboard": { "K": 0 },
-      "stimulus": ["start", "tick", "write:K=1", "tick", "advance:1", "tick"],
+      "stimulus": ["start", "tick", "write:K=1", "tick", "advance:1", "tick", "settle"],
       "expected": { "updates": [
         ["search:root", "seq.activate", "g.pass", "w.activate"],
         ["bb.write:K=1", "g.observe", "g.fail"],
-        ["w.abort"],
+        ["search:seq", "w.abort"],
         ["w.finish:Aborted"],
         ["search:seq", "seq.complete:Failure"]
       ]}
@@ -56,10 +57,14 @@
           "b": { "type": "InstantTask", "result": "Success" }
         }
       },
-      "stimulus": ["start", "tick", "start", "tick"],
+      "stimulus": ["start", "settle", "start", "settle"],
       "expected": { "updates": [
-        ["search:root", "sel.activate", "a.activate", "a.count:1", "a.finish:Failure", "b.activate", "b.finish:Success", "sel.complete:Success"],
-        ["search:root", "sel.activate", "a.activate", "a.count:2", "a.finish:Failure", "b.activate", "b.finish:Success", "sel.complete:Success"]
+        ["search:root", "sel.activate", "a.activate", "a.count:1", "a.finish:Failure"],
+        ["search:sel", "b.activate", "b.finish:Success"],
+        ["search:sel", "sel.complete:Success"],
+        ["search:root", "sel.activate", "a.activate", "a.count:2", "a.finish:Failure"],
+        ["search:sel", "b.activate", "b.finish:Success"],
+        ["search:sel", "sel.complete:Success"]
       ]}
     },
     {
@@ -77,14 +82,17 @@
           "c": { "type": "InstantTask", "result": "Success" }
         }
       },
-      "stimulus": ["@1:start", "@1:tick", "@1:start", "@1:tick", "@2:start", "@2:tick"],
+      "stimulus": ["@1:start", "@1:settle", "@1:start", "@1:settle", "@2:start", "@2:settle"],
       "expected": {
         "runner1": { "updates": [
-          ["search:root", "sel.activate", "cd.pass", "a.activate", "a.finish:Success", "sel.complete:Success"],
-          ["search:root", "sel.activate", "cd.fail", "c.activate", "c.finish:Success", "sel.complete:Success"]
+          ["search:root", "sel.activate", "cd.pass", "a.activate", "a.finish:Success"],
+          ["search:sel", "sel.complete:Success"],
+          ["search:root", "sel.activate", "cd.fail", "c.activate", "c.finish:Success"],
+          ["search:sel", "sel.complete:Success"]
         ]},
         "runner2": { "updates": [
-          ["search:root", "sel.activate", "cd.pass", "a.activate", "a.finish:Success", "sel.complete:Success"]
+          ["search:root", "sel.activate", "cd.pass", "a.activate", "a.finish:Success"],
+          ["search:sel", "sel.complete:Success"]
         ]}
       }
     }

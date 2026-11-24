@@ -1,4 +1,5 @@
 {
+  "schema": "unity-bt.golden/1",
   "scenarios": [
     {
       "id": "S34-authored-default-read",
@@ -15,9 +16,10 @@
         }
       },
       "blackboard": { "K": 5 },
-      "stimulus": ["start", "tick"],
+      "stimulus": ["start", "settle"],
       "expected": { "updates": [
-        ["search:root", "sel.activate", "g.pass", "a.activate", "a.finish:Success", "sel.complete:Success"]
+        ["search:root", "sel.activate", "g.pass", "a.activate", "a.finish:Success"],
+        ["search:sel", "sel.complete:Success"]
       ]}
     },
     {
@@ -34,13 +36,15 @@
           "w": { "type": "LatentTask" }
         }
       },
-      "stimulus": ["start", "tick", "clear:K", "write:K=1", "clear:K", "tick"],
+      "stimulus": ["start", "tick", "clear:K", "write:K=1", "clear:K", "write:K=1", "tick", "settle"],
       "expected": { "updates": [
         ["search:root", "sel.activate", "g.fail", "w.activate"],
         ["bb.clear:K"],
         ["bb.write:K=1", "g.observe", "g.pass"],
         ["bb.clear:K", "g.observe", "g.fail"],
-        ["w.abort", "w.finish:Aborted", "search:root", "g.fail", "w.activate"]
+        ["bb.write:K=1", "g.observe", "g.pass"],
+        ["search:sel", "g.pass", "w.abort", "w.finish:Aborted", "a.activate", "a.finish:Success"],
+        ["search:sel", "sel.complete:Success"]
       ]}
     }
   ]

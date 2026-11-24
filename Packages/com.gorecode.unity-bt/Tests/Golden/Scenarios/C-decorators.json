@@ -1,4 +1,5 @@
 {
+  "schema": "unity-bt.golden/1",
   "scenarios": [
     {
       "id": "S15-two-guards-and",
@@ -16,9 +17,10 @@
         }
       },
       "blackboard": { "K": 0 },
-      "stimulus": ["start", "tick"],
+      "stimulus": ["start", "settle"],
       "expected": { "updates": [
-        ["search:root", "sel.activate", "g1.pass", "g2.pass", "a.activate", "a.finish:Success", "sel.complete:Success"]
+        ["search:root", "sel.activate", "g1.pass", "g2.pass", "a.activate", "a.finish:Success"],
+        ["search:sel", "sel.complete:Success"]
       ]}
     },
     {
@@ -36,9 +38,10 @@
         }
       },
       "blackboard": { "K": 1 },
-      "stimulus": ["start", "tick"],
+      "stimulus": ["start", "settle"],
       "expected": { "updates": [
-        ["search:root", "sel.activate", "g.fail", "b.activate", "b.finish:Success", "sel.complete:Success"]
+        ["search:root", "sel.activate", "g.fail", "b.activate", "b.finish:Success"],
+        ["search:sel", "sel.complete:Success"]
       ]}
     },
     {
@@ -56,17 +59,18 @@
         }
       },
       "blackboard": { "K": 0 },
-      "stimulus": ["start", "tick", "write:K=1", "complete:a:Success", "tick"],
+      "stimulus": ["start", "tick", "write:K=1", "complete:a:Success", "tick", "settle"],
       "expected": { "updates": [
         ["search:root", "seq.activate", "g.pass", "a.activate"],
         ["bb.write:K=1"],
         ["a.finish:Success"],
-        ["search:seq", "b.activate", "b.finish:Success", "seq.complete:Success"]
+        ["search:seq", "b.activate", "b.finish:Success"],
+        ["search:seq", "seq.complete:Success"]
       ]}
     },
     {
       "id": "S18-self-abort",
-      "title": "AbortMode.Self: the condition turning false aborts the running branch",
+      "title": "AbortMode.Self: the condition turning false aborts the running branch and the parent continues as if it failed",
       "statements": ["S18"],
       "requires": ["sequence", "latentTask", "blackboardDecorator", "observerAbort.self"],
       "tree": {
@@ -79,16 +83,16 @@
         }
       },
       "blackboard": { "K": 0 },
-      "stimulus": ["start", "tick", "write:K=1", "tick"],
+      "stimulus": ["start", "tick", "write:K=1", "tick", "settle"],
       "expected": { "updates": [
         ["search:root", "seq.activate", "g.pass", "a.activate"],
         ["bb.write:K=1", "g.observe", "g.fail"],
-        ["a.abort", "a.finish:Aborted", "search:seq", "seq.complete:Failure"]
+        ["search:seq", "a.abort", "a.finish:Aborted", "seq.complete:Failure"]
       ]}
     },
     {
       "id": "S19-lower-priority-abort",
-      "title": "AbortMode.LowerPriority: the guard's result flipping to passing aborts lower-priority execution and re-searches from the root",
+      "title": "AbortMode.LowerPriority: the guard's result flipping to passing runs a search limited to the decorated branch, aborting lower-priority execution",
       "statements": ["S19"],
       "requires": ["selector", "latentTask", "instantTask", "blackboardDecorator", "observerAbort.lowerPriority"],
       "tree": {
@@ -101,11 +105,12 @@
         }
       },
       "blackboard": { "K": 0 },
-      "stimulus": ["start", "tick", "write:K=1", "tick"],
+      "stimulus": ["start", "tick", "write:K=1", "tick", "settle"],
       "expected": { "updates": [
         ["search:root", "sel.activate", "g.fail", "w.activate"],
         ["bb.write:K=1", "g.observe", "g.pass"],
-        ["w.abort", "w.finish:Aborted", "search:root", "g.pass", "t1.activate", "t1.finish:Success", "sel.complete:Success"]
+        ["search:sel", "g.pass", "w.abort", "w.finish:Aborted", "t1.activate", "t1.finish:Success"],
+        ["search:sel", "sel.complete:Success"]
       ]}
     },
     {
@@ -123,18 +128,18 @@
         }
       },
       "blackboard": { "K": 0 },
-      "stimulus": ["start", "tick", "write:K=1", "tick", "write:K=0", "tick"],
+      "stimulus": ["start", "tick", "write:K=1", "tick", "write:K=0", "tick", "settle"],
       "expected": { "updates": [
         ["search:root", "sel.activate", "g.fail", "w2.activate"],
         ["bb.write:K=1", "g.observe", "g.pass"],
-        ["w2.abort", "w2.finish:Aborted", "search:root", "g.pass", "w1.activate"],
+        ["search:sel", "g.pass", "w2.abort", "w2.finish:Aborted", "w1.activate"],
         ["bb.write:K=0", "g.observe", "g.fail"],
-        ["w1.abort", "w1.finish:Aborted", "search:sel", "w2.activate"]
+        ["search:sel", "w1.abort", "w1.finish:Aborted", "w2.activate"]
       ]}
     },
     {
-      "id": "S21-multi-observer-coalesced",
-      "title": "One write hitting two observers: both re-evaluate in registration order; a single root search follows",
+      "id": "S21-multi-observer-priority",
+      "title": "One write hitting two observers: both re-evaluate; the higher-priority request wins and the other is skipped",
       "statements": ["S21"],
       "requires": ["selector", "latentTask", "instantTask", "blackboardDecorator", "observerAbort.lowerPriority"],
       "tree": {
@@ -149,11 +154,12 @@
         }
       },
       "blackboard": { "K": 0 },
-      "stimulus": ["start", "tick", "write:K=1", "tick"],
+      "stimulus": ["start", "tick", "write:K=1", "tick", "settle"],
       "expected": { "updates": [
         ["search:root", "sel.activate", "g1.fail", "g2.fail", "w.activate"],
         ["bb.write:K=1", "g1.observe", "g1.pass", "g2.observe", "g2.pass"],
-        ["w.abort", "w.finish:Aborted", "search:root", "g1.pass", "t1.activate", "t1.finish:Success", "sel.complete:Success"]
+        ["search:sel", "g1.pass", "w.abort", "w.finish:Aborted", "t1.activate", "t1.finish:Success"],
+        ["search:sel", "sel.complete:Success"]
       ]}
     },
     {
@@ -170,11 +176,14 @@
           "c": { "type": "InstantTask", "result": "Success" }
         }
       },
-      "stimulus": ["start", "tick", "start", "tick", "advance:2", "start", "tick"],
+      "stimulus": ["start", "settle", "start", "settle", "advance:2", "start", "settle"],
       "expected": { "updates": [
-        ["search:root", "sel.activate", "cd.pass", "a.activate", "a.finish:Success", "sel.complete:Success"],
-        ["search:root", "sel.activate", "cd.fail", "c.activate", "c.finish:Success", "sel.complete:Success"],
-        ["search:root", "sel.activate", "cd.pass", "a.activate", "a.finish:Success", "sel.complete:Success"]
+        ["search:root", "sel.activate", "cd.pass", "a.activate", "a.finish:Success"],
+        ["search:sel", "sel.complete:Success"],
+        ["search:root", "sel.activate", "cd.fail", "c.activate", "c.finish:Success"],
+        ["search:sel", "sel.complete:Success"],
+        ["search:root", "sel.activate", "cd.pass", "a.activate", "a.finish:Success"],
+        ["search:sel", "sel.complete:Success"]
       ]}
     },
     {
@@ -191,10 +200,12 @@
           "c": { "type": "InstantTask", "result": "Success" }
         }
       },
-      "stimulus": ["start", "tick", "tick"],
+      "stimulus": ["start", "settle"],
       "expected": { "updates": [
         ["search:root", "sel.activate", "loop.pass", "a.activate", "a.finish:Failure"],
-        ["a.activate", "a.finish:Failure", "c.activate", "c.finish:Success", "sel.complete:Success"]
+        ["search:sel", "loop.pass", "a.activate", "a.finish:Failure"],
+        ["search:sel", "c.activate", "c.finish:Success"],
+        ["search:sel", "sel.complete:Success"]
       ]}
     },
     {
@@ -211,11 +222,12 @@
           "c": { "type": "InstantTask", "result": "Success" }
         }
       },
-      "stimulus": ["start", "tick", "tick", "advance:1", "tick"],
+      "stimulus": ["start", "tick", "tick", "advance:1", "tick", "settle"],
       "expected": { "updates": [
         ["search:root", "sel.activate", "loop.pass", "a.activate", "a.finish:Success"],
-        ["a.activate", "a.finish:Success"],
-        ["a.activate", "a.finish:Success", "sel.complete:Success"]
+        ["search:sel", "loop.pass", "a.activate", "a.finish:Success"],
+        ["search:sel", "loop.pass", "a.activate", "a.finish:Success"],
+        ["search:sel", "sel.complete:Success"]
       ]}
     },
     {
@@ -232,10 +244,10 @@
           "b": { "type": "InstantTask", "result": "Success" }
         }
       },
-      "stimulus": ["start", "tick", "advance:1", "advance:1", "tick"],
+      "stimulus": ["start", "tick", "advance:2", "tick", "settle"],
       "expected": { "updates": [
         ["search:root", "seq.activate", "tl.pass", "w.activate"],
-        ["w.abort", "w.finish:Aborted", "search:seq", "seq.complete:Failure"]
+        ["search:seq", "w.abort", "w.finish:Aborted", "seq.complete:Failure"]
       ]}
     },
     {
@@ -252,16 +264,17 @@
           "c": { "type": "InstantTask", "result": "Success" }
         }
       },
-      "stimulus": ["start", "tick"],
+      "stimulus": ["start", "settle"],
       "expected": { "updates": [
-        ["search:root", "sel.activate", "fs.pass", "a.activate", "a.finish:Failure", "sel.complete:Success"]
+        ["search:root", "sel.activate", "fs.pass", "a.activate", "a.finish:Failure"],
+        ["search:sel", "sel.complete:Success"]
       ]}
     },
     {
-      "id": "S25-force-success-not-on-abort",
-      "title": "ForceSuccess never converts an aborted execution: no success is recorded for the branch",
+      "id": "S25-force-success-converts-self-abort",
+      "title": "ForceSuccess also converts the Failed result a Self abort delivers to the parent; the next branch never runs",
       "statements": ["S25"],
-      "requires": ["selector", "latentTask", "instantTask", "forceResult", "blackboardDecorator", "observerAbort.self"],
+      "requires": ["selector", "latentTask", "forceResult", "blackboardDecorator", "observerAbort.self"],
       "tree": {
         "root": "sel",
         "nodes": {
@@ -273,18 +286,18 @@
         }
       },
       "blackboard": { "K": 0 },
-      "stimulus": ["start", "tick", "write:K=1", "tick"],
+      "stimulus": ["start", "tick", "write:K=1", "tick", "settle"],
       "expected": { "updates": [
         ["search:root", "sel.activate", "fs.pass", "g.pass", "w.activate"],
         ["bb.write:K=1", "g.observe", "g.fail"],
-        ["w.abort", "w.finish:Aborted", "search:sel", "c.activate", "c.finish:Success", "sel.complete:Success"]
+        ["search:sel", "w.abort", "w.finish:Aborted", "sel.complete:Success"]
       ]}
     },
     {
       "id": "S26-decorator-order",
-      "title": "[V] Multiple decorators on one node evaluate in attachment order with short-circuit (sandbox S26)",
+      "title": "Multiple decorators on one node evaluate in attachment order with short-circuit",
       "statements": ["S26"],
-      "requires": ["selector", "instantTask", "blackboardDecorator", "verify:S26"],
+      "requires": ["selector", "instantTask", "blackboardDecorator"],
       "tree": {
         "root": "sel",
         "nodes": {
@@ -295,9 +308,10 @@
           "b": { "type": "InstantTask", "result": "Success" }
         }
       },
-      "stimulus": ["start", "tick"],
+      "stimulus": ["start", "settle"],
       "expected": { "updates": [
-        ["search:root", "sel.activate", "g1.fail", "b.activate", "b.finish:Success", "sel.complete:Success"]
+        ["search:root", "sel.activate", "g1.fail", "b.activate", "b.finish:Success"],
+        ["search:sel", "sel.complete:Success"]
       ]}
     },
     {
@@ -315,11 +329,11 @@
         }
       },
       "blackboard": { "K": 5 },
-      "stimulus": ["start", "tick", "write:K=6", "tick"],
+      "stimulus": ["start", "tick", "write:K=6", "tick", "settle"],
       "expected": { "updates": [
         ["search:root", "seq.activate", "g.pass", "w.activate"],
         ["bb.write:K=6", "g.observe", "g.fail"],
-        ["w.abort", "w.finish:Aborted", "search:seq", "seq.complete:Failure"]
+        ["search:seq", "w.abort", "w.finish:Aborted", "seq.complete:Failure"]
       ]}
     },
     {
@@ -345,10 +359,10 @@
       ]}
     },
     {
-      "id": "S54-notify-value-change",
-      "title": "NotifyMode.OnValueChange: any notifying write re-evaluates the guard even when the result is unchanged",
-      "statements": ["S54"],
-      "requires": ["sequence", "latentTask", "blackboardDecorator", "observerAbort.self"],
+      "id": "S54-notify-value-change-restarts",
+      "title": "NotifyMode.OnValueChange: any notifying write re-requests the branch; while the condition passes and the branch executes, it restarts",
+      "statements": ["S54", "S49"],
+      "requires": ["sequence", "latentTask", "blackboardDecorator", "observerAbort.self", "notify.valueChange"],
       "tree": {
         "root": "seq",
         "nodes": {
@@ -359,11 +373,33 @@
         }
       },
       "blackboard": { "K": 5 },
-      "stimulus": ["start", "tick", "write:K=6", "tick"],
+      "stimulus": ["start", "tick", "write:K=6", "tick", "settle"],
       "expected": { "updates": [
         ["search:root", "seq.activate", "g.pass", "w.activate"],
         ["bb.write:K=6", "g.observe", "g.pass"],
-        []
+        ["search:seq", "g.pass", "w.abort", "w.finish:Aborted", "w.activate"]
+      ]}
+    },
+    {
+      "id": "S54-notify-value-change-keep-running",
+      "title": "With RestartPolicy.KeepRunning the restart requested by OnValueChange is discarded",
+      "statements": ["S54", "S49"],
+      "requires": ["sequence", "latentTask", "blackboardDecorator", "observerAbort.self", "notify.valueChange", "restartPolicy"],
+      "tree": {
+        "root": "seq",
+        "nodes": {
+          "seq": { "type": "Sequence", "children": ["g", "b"] },
+          "g": { "type": "BlackboardDecorator", "child": "w", "key": "K", "query": { "op": "gt", "value": 3 }, "notify": "OnValueChange", "abort": "Self" },
+          "w": { "type": "LatentTask", "restartPolicy": "KeepRunning" },
+          "b": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "blackboard": { "K": 5 },
+      "stimulus": ["start", "tick", "write:K=6", "tick", "settle"],
+      "expected": { "updates": [
+        ["search:root", "seq.activate", "g.pass", "w.activate"],
+        ["bb.write:K=6", "g.observe", "g.pass"],
+        ["search:seq", "g.pass", "search:discard"]
       ]}
     }
   ]

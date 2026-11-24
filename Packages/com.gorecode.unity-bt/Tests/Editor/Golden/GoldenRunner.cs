@@ -19,7 +19,7 @@ namespace Gorecode.Bt.Tests.Golden
                 throw new NotSupportedException("Multi-runner scenarios need a runtime with the 'multiRunner' capability.");
             }
 
-            runtime.Load(scenario.Tree, scenario.Blackboard);
+            runtime.Load(scenario.Tree, scenario.Trees, scenario.Blackboard, scenario.Looped);
 
             var updates = new List<List<string>>();
             foreach (var rawStep in scenario.Stimulus)
@@ -31,6 +31,11 @@ namespace Gorecode.Bt.Tests.Golden
                 }
                 else if (step == "settle")
                 {
+                    if (scenario.Looped)
+                    {
+                        throw new NotSupportedException("'settle' never terminates in looped execution mode; use explicit ticks");
+                    }
+
                     var guard = 0;
                     while (runtime.HasPendingRequests)
                     {
@@ -51,6 +56,12 @@ namespace Gorecode.Bt.Tests.Golden
                         updates.Add(segment);
                     }
                 }
+            }
+
+            if (runtime.HasPendingRequests && !scenario.PendingAtEnd)
+            {
+                throw new InvalidOperationException(
+                    "scenario '" + scenario.Id + "' ended with a pending execution request; add stimulus or declare \"pendingAtEnd\": true");
             }
 
             return updates;
