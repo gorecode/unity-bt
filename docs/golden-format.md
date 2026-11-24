@@ -78,7 +78,9 @@ Decorators wrap their `child`; a chain of decorators on one node is a chain of
 | `complete:id:Result` | A latent task finishes; its continuation is deferred to the next update (S08). |
 | `advance:seconds` | Move the logical clock; due timers fire within this step. Randomness is never used (deviation pinned to 0, S33). |
 | `inject:tag:treeName` | Inject a subtree into a dynamic subtree task (S40). |
-| `breakpoint:id`, `step`, `resume` | Debugger controls (S43). |
+| `breakpoint:id` | Debugger: the next activation of node `id` pauses the run right before it; the update in which it would have activated ends there. |
+| `step` | Debugger: run exactly one node's transition (the paused activation and its result), then pause again. |
+| `resume` | Debugger: leave pause mode; the following `tick`/`settle` steps run normal updates. |
 
 **Segment rule:** `tick` (and each tick of `settle`) always opens a segment; every
 other step opens a segment only if it emitted events.
@@ -108,33 +110,58 @@ Nested-tree nodes are addressed `subtreeId/nodeId`; injected root decorators as
 Expected traces are derived from these rules; the naive reference runtime
 implements exactly them.
 
-1. **One task per update.** A search only locates the next task
+1. **At most one task per update.** A search only locates the next task
    (2094-2154); the current task is aborted if the search moved away from it;
-   then exactly one task executes (2200-2222). An instant task's result is a
-   request for the *next* update (557-561, 1144-1150) — S07, S08.
+   then at most one task executes (2200-2222). A task's result — instant or
+   latent — is a request for the *next* update (557-561, 1144-1150) — S07, S08.
 2. **Event order inside an update:** search events first (`search:…`, composite
    activations as the search enters them, decorator `pass`/`fail`), then the
    abort of the abandoned task, then composite completions, then the new task's
    execution. Composite completion carries the result that ended it (a child's
    success for a selector, a child's failure for a sequence) or its default
    when it ran out of children.
+   *Mapping rule for differential comparison:* UE decides a composite's result
+   during its search (2106-2116) and records it before the abort; this trace
+   emits the completion after the abort. Compare node-level results, not the
+   position of completion markers relative to abort markers.
 3. **Requests are not merged.** Several pending requests → the one with the
-   highest-priority search start is processed, the rest skipped (1256-1281).
-4. **Observer arming** (`BTCompositeNode.cpp` 227-250, 281-292, 297-315):
+   highest-priority search start is processed; the others are skipped, but a
+   skipped request widens the processed search's range (1256-1281) — S08, S21.
+4. **Searches are range-limited.** A continuation and a root search may select
+   anything below their start; an observer-triggered search may select only
+   inside the decorated branch. A task found beyond the range invalidates the
+   search, which is rolled back with nothing aborted (2156-2160, 2181-2186);
+   no task at all is a valid, exhausting search — S19.
+5. **Observer arming** (`BTCompositeNode.cpp` 227-250, 281-292, 297-315):
    Self/Both observers register when a search enters their branch, LP/Both
    observers when a search finds the branch failing at entry; Self observers
    unregister when the branch is left, LP observers re-arm. A branch no search
    reached is not armed.
-5. **Observer requests** (`BTDecorator.cpp` 88-120; `ActivateBranch`
-   990-1023): a failing result asks the parent to continue with a failed child;
-   a passing result asks for a search limited to the decorated branch — and
-   with `OnValueChange`, also restarts an executing branch.
-6. **Discard:** a search that selects a running `KeepRunning` task is rolled
+6. **Observer changes are applied when the search's data is applied** — after
+   the abort of the task the search replaces (2245-2254), and never for a
+   search that found no task (1498-1508). Observers positioned below the new
+   task are removed at every task execution (2245-2248, 2390-2406), including
+   loop re-iterations and continuations.
+7. **Observer requests** (`BTDecorator.cpp` 88-120; 990-1023): every
+   notification evaluates the condition. A failing result asks the parent to
+   continue with a failed child; a passing result asks for a search limited to
+   the decorated branch — and with `OnValueChange` also restarts an executing
+   branch. No previous result is stored.
+8. **Discard:** a search that selects a running `KeepRunning` task is rolled
    back (2162-2186); the search events it already produced stay in the trace.
-7. **Exhaustion** (585-613): all auxiliary nodes are unregistered; looped mode
-   re-requests a root search, single-run mode stops.
-8. **Slow aborts** (2175-2179): the tree keeps its state until a latent abort
-   finishes, then the same request is searched again.
+9. **Finish** (585-613): when the root composite ends with any result, every
+   auxiliary node is unregistered; looped mode re-requests a root search,
+   single-run mode stops — S62.
+10. **Slow aborts** (1432-1454, 1776-1800): nothing is searched while a task
+    is aborting; the tree keeps its state. When the abort completes, the
+    outcome computed before it is applied without a new search; a request that
+    arrived during the abort discards that outcome and is searched instead,
+    with its range limit removed — S29, S50.
+
+Not modeled by the naive runtime (unexercised; extend before a scenario needs
+them): a restart passing through a running nested composite deactivates and
+re-activates it (2336-2348); composite services, which activate with the
+applied search data after the abort (2254).
 
 ## Comparison
 
@@ -148,3 +175,7 @@ prints a per-update diff with missing/extra events.
   `verify:` gates.
 - Typed blackboard keys, log assertions (S40), and a per-runner event stream for
   `runners > 1`.
+- Tracing a replayed run as a second stream (S42's replay assertion itself; the
+  scenario only pins the original trace).
+- Runtime lifecycle beyond `Load`: no unload, and the step/event protocol is
+  plain strings rather than typed values.

@@ -3,7 +3,7 @@
   "scenarios": [
     {
       "id": "S09-parallel-activates-both",
-      "title": "SimpleParallel activates its main task and background branch together",
+      "title": "SimpleParallel runs its main task first and activates the background branch on the next update",
       "statements": ["S09"],
       "requires": ["simpleParallel", "latentTask"],
       "tree": {
@@ -14,9 +14,10 @@
           "bg": { "type": "LatentTask" }
         }
       },
-      "stimulus": ["start", "tick"],
+      "stimulus": ["start", "tick", "tick"],
       "expected": { "updates": [
-        ["search:root", "par.activate", "m.activate", "bg.activate"]
+        ["search:root", "par.activate", "m.activate"],
+        ["search:par", "bg.activate"]
       ]}
     },
     {
@@ -32,9 +33,10 @@
           "bg": { "type": "LatentTask" }
         }
       },
-      "stimulus": ["start", "tick", "advance:1", "tick"],
+      "stimulus": ["start", "tick", "tick", "advance:1", "tick"],
       "expected": { "updates": [
-        ["search:root", "par.activate", "m.activate", "bg.activate"],
+        ["search:root", "par.activate", "m.activate"],
+        ["search:par", "bg.activate"],
         ["m.finish:Success"],
         ["search:par", "bg.abort", "bg.finish:Aborted", "par.complete:Success"]
       ]}
@@ -52,9 +54,10 @@
           "bg": { "type": "LatentTask", "duration": 3 }
         }
       },
-      "stimulus": ["start", "tick", "advance:1", "tick", "advance:2", "tick"],
+      "stimulus": ["start", "tick", "tick", "advance:1", "tick", "advance:2", "tick"],
       "expected": { "updates": [
-        ["search:root", "par.activate", "m.activate", "bg.activate"],
+        ["search:root", "par.activate", "m.activate"],
+        ["search:par", "bg.activate"],
         ["m.finish:Success"],
         [],
         ["bg.finish:Success"],
@@ -78,9 +81,10 @@
         }
       },
       "blackboard": { "K": 0 },
-      "stimulus": ["start", "tick", "write:K=1", "tick", "settle"],
+      "stimulus": ["start", "tick", "tick", "write:K=1", "tick", "settle"],
       "expected": { "updates": [
-        ["search:root", "sel.activate", "g.fail", "par.activate", "m.activate", "bg.activate"],
+        ["search:root", "sel.activate", "g.fail", "par.activate", "m.activate"],
+        ["search:par", "bg.activate"],
         ["bb.write:K=1", "g.observe", "g.pass"],
         ["search:sel", "g.pass", "m.abort", "m.finish:Aborted", "bg.abort", "bg.finish:Aborted", "t.activate", "t.finish:Success"],
         ["search:sel", "sel.complete:Success"]
@@ -99,9 +103,10 @@
           "bg": { "type": "LatentTask", "duration": 1 }
         }
       },
-      "stimulus": ["start", "tick", "advance:1", "tick", "advance:2", "tick"],
+      "stimulus": ["start", "tick", "tick", "advance:1", "tick", "advance:2", "tick"],
       "expected": { "updates": [
-        ["search:root", "par.activate", "m.activate", "bg.activate"],
+        ["search:root", "par.activate", "m.activate"],
+        ["search:par", "bg.activate"],
         ["bg.finish:Success"],
         [],
         ["m.finish:Success"],
@@ -110,7 +115,7 @@
     },
     {
       "id": "S50-latent-aborts-ordered",
-      "title": "[V] A branch switch waits for all in-flight latent aborts; ordering between them (sandbox S50)",
+      "title": "[V] A branch switch waits for all in-flight latent aborts, then applies the computed outcome without a new search; ordering between the aborts (sandbox S50)",
       "statements": ["S50"],
       "requires": ["selector", "instantTask", "latentTask", "slowAbort", "simpleParallel", "blackboardDecorator", "observerAbort.lowerPriority", "timeAdvance", "verify:S50"],
       "tree": {
@@ -125,13 +130,14 @@
         }
       },
       "blackboard": { "K": 0 },
-      "stimulus": ["start", "tick", "write:K=1", "tick", "advance:1", "tick", "settle"],
+      "stimulus": ["start", "tick", "tick", "write:K=1", "tick", "advance:1", "tick", "settle"],
       "expected": { "updates": [
-        ["search:root", "sel.activate", "g.fail", "par.activate", "m.activate", "bg.activate"],
+        ["search:root", "sel.activate", "g.fail", "par.activate", "m.activate"],
+        ["search:par", "bg.activate"],
         ["bb.write:K=1", "g.observe", "g.pass"],
         ["search:sel", "g.pass", "m.abort", "bg.abort"],
         ["m.finish:Aborted", "bg.finish:Aborted"],
-        ["search:sel", "g.pass", "t.activate", "t.finish:Success"],
+        ["t.activate", "t.finish:Success"],
         ["search:sel", "sel.complete:Success"]
       ]}
     },

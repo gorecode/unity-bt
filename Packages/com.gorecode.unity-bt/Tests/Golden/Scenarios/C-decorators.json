@@ -114,6 +114,29 @@
       ]}
     },
     {
+      "id": "S19-bounded-search-discarded",
+      "title": "An observer-triggered search is limited to its branch: when that branch no longer passes and the only other task lies outside the range, the search is discarded and the running task is left alone",
+      "statements": ["S19"],
+      "requires": ["selector", "latentTask", "instantTask", "blackboardDecorator", "observerAbort.lowerPriority"],
+      "tree": {
+        "root": "sel",
+        "nodes": {
+          "sel": { "type": "Selector", "children": ["g", "w"] },
+          "g": { "type": "BlackboardDecorator", "child": "a", "key": "K", "query": "IsSet", "abort": "LowerPriority" },
+          "a": { "type": "InstantTask", "result": "Success" },
+          "w": { "type": "LatentTask" }
+        }
+      },
+      "stimulus": ["start", "tick", "write:K=1", "clear:K", "tick", "tick"],
+      "expected": { "updates": [
+        ["search:root", "sel.activate", "g.fail", "w.activate"],
+        ["bb.write:K=1", "g.observe", "g.pass"],
+        ["bb.clear:K", "g.observe", "g.fail"],
+        ["search:sel", "g.fail", "search:discard"],
+        []
+      ]}
+    },
+    {
       "id": "S20-both-abort",
       "title": "AbortMode.Both behaves as Self and LowerPriority at once",
       "statements": ["S20"],
@@ -251,6 +274,28 @@
       ]}
     },
     {
+      "id": "S24-time-limit-resets-on-reentry",
+      "title": "Time limit: the timer restarts from the full limit every time the branch is re-entered",
+      "statements": ["S24"],
+      "requires": ["sequence", "latentTask", "timeLimit", "timeAdvance"],
+      "tree": {
+        "root": "seq",
+        "nodes": {
+          "seq": { "type": "Sequence", "children": ["tl", "b"] },
+          "tl": { "type": "TimeLimitDecorator", "child": "w", "seconds": 2 },
+          "w": { "type": "LatentTask" },
+          "b": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "stimulus": ["start", "tick", "advance:1.5", "start", "tick", "advance:0.5", "tick", "advance:1.5", "tick"],
+      "expected": { "updates": [
+        ["search:root", "seq.activate", "tl.pass", "w.activate"],
+        ["search:root", "tl.pass", "w.abort", "w.finish:Aborted", "w.activate"],
+        [],
+        ["search:seq", "w.abort", "w.finish:Aborted", "seq.complete:Failure"]
+      ]}
+    },
+    {
       "id": "S25-force-success-converts",
       "title": "ForceSuccess converts a child's Failure to Success at completion",
       "statements": ["S25"],
@@ -355,6 +400,28 @@
       "expected": { "updates": [
         ["search:root", "seq.activate", "g.pass", "w.activate"],
         ["bb.write:K=5"],
+        []
+      ]}
+    },
+    {
+      "id": "S54-notify-result-change-no-restart",
+      "title": "NotifyMode.OnResultChange: a change that leaves the condition passing re-evaluates the guard but does not restart the executing branch",
+      "statements": ["S54"],
+      "requires": ["sequence", "latentTask", "blackboardDecorator", "observerAbort.self"],
+      "tree": {
+        "root": "seq",
+        "nodes": {
+          "seq": { "type": "Sequence", "children": ["g", "b"] },
+          "g": { "type": "BlackboardDecorator", "child": "w", "key": "K", "query": { "op": "gt", "value": 3 }, "abort": "Self" },
+          "w": { "type": "LatentTask" },
+          "b": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "blackboard": { "K": 5 },
+      "stimulus": ["start", "tick", "write:K=6", "tick", "settle"],
+      "expected": { "updates": [
+        ["search:root", "seq.activate", "g.pass", "w.activate"],
+        ["bb.write:K=6", "g.observe", "g.pass"],
         []
       ]}
     },

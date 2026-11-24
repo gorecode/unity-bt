@@ -1,9 +1,9 @@
-# UE5 Behavior Tree — Formal Specification (v1.0.1)
+# UE5 Behavior Tree — Formal Specification (v1.0.2)
 
 **Status:** v1.0 revised 2026-11-23 after the R2 second-agent review (findings
 B1–B11, N1–N10) and verification against UE 5.8 engine source (tag
-`5.8.0-release`, commit `7deeb413`); v1.0.1 (2026-11-24) applies the erratum
-found by the P3 harness review (see the changelog). **Pending:** human
+`5.8.0-release`, commit `7deeb413`); v1.0.1 and v1.0.2 (2026-11-24) apply the
+errata found by the P3 harness reviews (see the changelog). **Pending:** human
 maintainer sign-off (R2 gate).
 
 Engine source was read as *behavioral spec only* (AGENTS.md legal rule):
@@ -85,16 +85,16 @@ Decisions (v1.0):
 ## A. Scheduler & execution model
 
 - **S01 [K]** — Updates are event-driven; there is no per-frame traversal. A
-  search runs only on: tree start/restart; latent-task completion; abort
-  completion; blackboard observer firing; timed re-requests (interval ticks of
-  active services/timed decorators that re-request execution); explicit
-  request. When nothing is pending, the component does not tick at
-  all. *(src-verified: the search flag is set only by execution requests
+  search runs only on: tree start/restart; any task result (instant or
+  latent); abort completion; blackboard observer firing; timed re-requests
+  (interval ticks of active services/timed decorators that re-request
+  execution); explicit request. When nothing is pending, the component does not
+  tick at all. *(src-verified: the search flag is set only by execution requests
   [src: BehaviorTreeComponent.cpp:1804-1812]; idle tick is disabled
   [src: BehaviorTreeComponent.cpp:38-39].)*
   *Stimulus:* latent task InProgress, several frames pass → *Trace:* no node
   transitions.
-- **S02 [D]** — Search evaluates root-down; child order at each composite
+- **S02 [D]** — A root search evaluates top-down; child order at each composite
   defines priority (leftmost = highest).
   *Stimulus:* selector with [A(fail), B(success)] → *Trace:* A activated→failed;
   B activated→succeeded; selector succeeded.
@@ -106,7 +106,8 @@ Decisions (v1.0):
   is aborted and re-executed. See S49. *(covered by S49's stimulus)*
 - **S05 [V]** — Residual restart cases beyond S04/S49: decorator re-check
   failures between loop iterations, and any node classes overriding the restart
-  default. Sandbox: LP abort → re-enter same branch with changed conditions.
+  default. Sandbox: restart while a loop is mid-iteration with changed
+  conditions.
   *Stimulus:* loop re-iteration whose guard flips false between iterations →
   *Trace:* branch exits; parent observes the child's result per S23.
 - **S06 [D]** — Sequence: children in order; any child failure fails the
@@ -115,7 +116,7 @@ Decisions (v1.0):
   *Stimulus:* [A(2s latent, success), B(instant success)] → *Trace:* A
   activated→running; (2s) A succeeded; next update: B activated→succeeded;
   following update: sequence succeeded.
-- **S07 [K]** — A search finds at most one task, and exactly one task executes
+- **S07 [K]** — A search finds at most one task, and at most one task executes
   per update. An instant task returns its result within that update; the
   continuation at its parent is a request like any other and is processed by
   the next update — a chain of instant tasks takes one update per task, plus
@@ -131,15 +132,18 @@ Decisions (v1.0):
   timer, explicit) is queued and processed on the component's next update,
   never inline with the triggering event. When several requests are pending
   for one update, the one whose search start has the highest priority is
-  processed and the others are skipped. *(src-verified [src:
-  BehaviorTreeComponent.cpp:1144-1150, 1804-1812; priority rule
-  1256-1281].)*
+  processed and the others are skipped — but a skipped request still widens
+  the processed search's range (outwards for a branch switch, removed for a
+  continuation), so the search may fall through into the second branch.
+  *(src-verified [src: BehaviorTreeComponent.cpp:1144-1150, 1804-1812;
+  priority and range rules 1256-1281].)*
   *Stimulus:* an instant task fails inside a selector → *Trace:* its finish is
   in update N; the selector's next child activates in update N+1.
   *Residual [V]:* interleaving of an observer request with the completion of
   the task whose update fired it (S36).
 - **S46 [D]** — The Root is unique, has exactly one child, and only a Composite
-  may be attached to it; every search begins at the Root.
+  may be attached to it; every root search begins at the Root (searches
+  triggered by observers start lower, S19).
   *Stimulus:* tree start → *Trace:* the root's composite is the first node
   activated.
 - **S48 [K]** — Continuation vs search: on task completion (Success/Failure),
@@ -156,10 +160,12 @@ Decisions (v1.0):
 ## B. Composites
 
 - **S09 [D]** — `SimpleParallel` has exactly two children: main task +
-  background subtree; both activate together. The main slot accepts task nodes
-  only (editor schema).
-  *Stimulus:* parallel start → *Trace:* main task activated and background
-  branch root activated in one update.
+  background subtree. The main slot accepts task nodes only (editor schema).
+  They do not start in the same update: the main task runs first and returns
+  InProgress; the background branch is searched on the next update.
+  *(src-verified [src: BTComposite_SimpleParallel.cpp:60-72].)*
+  *Stimulus:* parallel start → *Trace:* update 1: main task activated; update
+  2: background branch root activated.
 - **S10 [D]** — Finish mode **Immediate**: main task finishing aborts the
   background branch; parallel result = main result. *(result mapping [K],
   src-verified [src: BTComposite_SimpleParallel.cpp:110-126].)*
@@ -184,9 +190,10 @@ Decisions (v1.0):
   parallel-task removal path, background via branch deactivation). *(src-verified
   [src: BTComposite_SimpleParallel.cpp:110-126;
   BehaviorTreeComponent.cpp:1542-1571].)*
-  *Stimulus:* observer abort on the parallel's parent while both sides run →
-  *Trace:* both children deliver Finish(Aborted) (order between them: S50's
-  [V]); parallel Finish(Aborted); new search.
+  *Stimulus:* a LowerPriority observer on the parallel's sibling branch fires
+  while both sides run → *Trace:* next update: a search limited to that
+  branch; both children abort and deliver Finish(Aborted) (order between them:
+  S50's [V]); the branch's task executes.
 - **S14 [V]** — Background branch finishing while the main task still runs:
   presumed no effect on the node (the main task keeps running), but the source
   shows the parallel re-selecting its background child on the next search
@@ -246,7 +253,10 @@ Decisions (v1.0):
   *Stimulus:* branch1(guard on key K, LP) failed at entry, branch2 running; K
   flips so branch1's guard now passes → *Trace:* next update: search at the
   parent; guard re-checked; branch2's task abort + Finish(Aborted); branch1's
-  task executes.
+  task executes. If the guarded branch no longer passes and the search's only
+  find lies beyond the requested range, the search is invalid and rolled
+  back: the running task is left untouched *(src:
+  BehaviorTreeComponent.cpp:2156-2160, 2181-2186]*.
 - **S20 [D]** — `AbortMode.Both` = Self + LowerPriority simultaneously: the
   observer is registered while its branch executes (armed on activation), when
   the branch fails at entry, and after the branch is left. *(src:
@@ -254,8 +264,9 @@ Decisions (v1.0):
   *(covered by S18 + S19 stimuli combined)*
 - **S21 [K]** — Observers notified by one write each queue a request; the
   request whose search start has the highest priority is processed and the
-  others are skipped — only the first branch is attempted, never a merged
-  search. UE imposes **no defined ordering** among the notified observers
+  others are skipped. A skipped request is not inert: it widens the processed
+  search's range (S08), so that search may fall through into the second
+  branch. UE imposes **no defined ordering** among the notified observers
   themselves (multimap iteration; [src: BlackboardComponent.cpp:426-484]);
   **[ours]**: our runtime notifies in registration order so golden tests can
   assert it (not differentially comparable). *(src-verified priority rule
@@ -300,9 +311,10 @@ Decisions (v1.0):
   Self abort is processed as a regular deactivation carrying Failed, so the
   parent sees Succeeded and a force-success branch never falls through to the
   next one. Only a literal `Aborted` result (a branch switched away by a
-  search) passes through unconverted. *(src-verified: "we only modify result
-  if search originates from our parent node (abort self) or on our associated
-  node (failure)" [src: BTDecorator_ForceSuccess.cpp:21-43; abort path
+  search) passes through unconverted. *(src-verified: the conversion applies
+  when the request comes from the decorator's own parent — a Self abort — or
+  from its own node, and never changes a literal Aborted result [src:
+  BTDecorator_ForceSuccess.cpp:21-43; abort path
   BTCompositeNode.cpp:252-265].)*
   **[ours]** `ForceResultDecorator` additionally offers ForceFailure — our
   extension, no UE counterpart (the engine has no ForceFailure node).
@@ -330,9 +342,14 @@ Decisions (v1.0):
 - **S29 [K]** — Abort path: an abort request calls the task's abort hook; the
   task may finish the abort immediately or asynchronously; the tree does not
   proceed past the aborting task until its abort completes; Finish(Aborted) is
-  delivered.
-  *Stimulus:* abort requested on a latent task with a slow abort → *Trace:*
-  abort hook invoked; (delay) Finish(Aborted); tree proceeds only after.
+  delivered. Nothing is searched while a task is aborting; when the abort
+  completes, the outcome the search already computed is applied **without a
+  new search**, and only a request that arrived during the abort causes one.
+  *(src-verified [src: BehaviorTreeComponent.cpp:1432-1454, 1776-1800,
+  562-566].)*
+  *Stimulus:* a Self abort of a task with a slow abort inside a sequence →
+  *Trace:* abort delivered; (delay) Finish(Aborted); the next update applies
+  the pending outcome — the sequence fails — with no new search.
 - **S30 [K]** — `NodeMemory` persists across abort and re-entry for as long as
   the owning tree instance lives; it is not wiped by restarts. Tasks
   re-initialize the fields they care about at activation. *(src-verified [src:
@@ -393,8 +410,8 @@ Decisions (v1.0):
 - **S53 [V]** — Service continuity: a re-search that re-selects the currently
   active path does not deactivate/reactivate services on that path nor reset
   their interval timers (S33 options excepted). Presumed: continuous.
-  *Stimulus:* LP abort re-search landing back on the running branch →
-  *Trace:* no service deactivate/activate pair.
+  *Stimulus:* a restart that re-selects the active path (its task sets
+  `RestartPolicy.KeepRunning`) → *Trace:* no service deactivate/activate pair.
 
 ## F. Blackboard
 
@@ -425,25 +442,30 @@ Decisions (v1.0):
   does (single notification kind); a no-op write (same value) does not notify
   at all. *(src-verified [src: BlackboardComponent.cpp:781-797;
   BlackboardComponent.h:358-361].)*
-  *Stimulus:* LP guard (IsSet on K) idle; branch2 running; K cleared →
-  *Trace:* branch2 aborted; re-search skips the guard.
+  *Stimulus:* running task under a Self guard (IsSet on K); K cleared →
+  *Trace:* the guard is notified exactly as by a write; next update the task
+  aborts and the parent continues with a failed child (S18).
 - **S38 [ours]** *(structural — enforced by the banned-API analyzer and
   allocation tests)* — Value types never box; keys are struct-typed per the
   catalog; key identifiers are compile-time symbols (no runtime string lookups
   in the tick path). String values follow the catalog's immutability rule.
 - **S54 [K]** — `BlackboardDecorator` model: `KeyQuery` ∈ {IsSet, IsNotSet};
-  `NotifyMode` ∈ {OnResultChange (requests only when the condition's result
-  flips), OnValueChange (requests on every notifying change while the
-  condition passes)}; UE default OnResultChange. With OnValueChange, a write
-  that leaves the condition passing while the branch executes **restarts the
-  branch** (abort + re-execute) unless the task's `RestartPolicy` is
-  KeepRunning — the main use of that flag. *(src-verified: "always request
-  when passing" [src: BTDecorator.cpp:88-120; ActivateBranch,
-  BehaviorTreeComponent.cpp:990-1023].)*
+  `NotifyMode` ∈ {OnResultChange (default), OnValueChange}. Every notification
+  of a registered observer evaluates the condition and requests: a failing
+  result asks an executing branch to stop (S18); a passing result asks for the
+  branch (S19). The modes differ in one thing only — with OnValueChange a
+  passing result **also re-requests an executing branch** (abort + re-execute),
+  unless the task's `RestartPolicy` is KeepRunning: the main use of that flag.
+  5.8 keeps no stored previous result; "result changes" are caught through
+  arming (S19): a Self observer exists only while its branch executes, so it
+  fires when the condition turns false; a LowerPriority observer exists only
+  while its branch is idle and re-requests it on any later passing change.
+  *(src-verified [src: BTDecorator_Blackboard.cpp:60-77;
+  BTDecorator.cpp:88-120; BehaviorTreeComponent.cpp:990-1023].)*
   *Stimulus:* guard "K > 3", OnValueChange, branch running; K 5→6 →
   re-evaluation passes; next update the running task is aborted and
-  re-executed. With OnResultChange: K 5→6 → no request; K 5→5 → no
-  notification at all.
+  re-executed. With OnResultChange: K 5→6 → re-evaluated, no request; K 5→5 →
+  no notification at all (S37).
 
 ## G. Tree lifecycle
 
@@ -471,7 +493,8 @@ Decisions (v1.0):
   parent tree at the subtree-task link (gating, observers, abort modes
   identical to decorators placed on the `SubtreeTask`); when the asset runs as
   the root tree they are ignored; the dynamic variant never supports them
-  (S40). *(src-verified [src: BehaviorTree.h:44-50;
+  (S40). A Self abort of a root decorator therefore finishes the subtree task
+  with Failure, as a Self abort under a plain decorator link would. *(src-verified [src: BehaviorTree.h:44-50;
   BehaviorTreeManager.cpp:181-214]. Note: Epic's Node Reference page says the
   Root supports no decorators — contradicted by the Run Behavior page and by
   the engine source; source treated as authoritative.)*
@@ -481,9 +504,10 @@ Decisions (v1.0):
   from the nested tree are visible to the parent tree.
   *Stimulus:* subtree writes K; parent guard on K evaluated after subtree
   completion → *Trace:* guard sees the subtree's value.
-- **S62 [K]** — Tree restart on exhaustion: when a search finds no executable
-  branch (the root is exhausted), **every auxiliary node is unregistered** and
-  — in loop-execution mode — a root search is requested for the next update,
+- **S62 [K]** — Tree restart on finish: whenever the root composite finishes
+  — with Failure because nothing was executable, or with a child's result —
+  **every auxiliary node is unregistered** and, in loop-execution mode, a root
+  search is requested for the next update,
   so an idle tree re-evaluates from the root on every update; single-run mode
   stops. Nothing stays "armed" between updates: a key change is noticed by the
   next root search, not by a registered observer. *(src-verified [src:
@@ -599,6 +623,25 @@ before the edit):
 - Also: S08 gained the request-priority rule; S18 states that the parent sees
   a failed child; S20/S21 state the arming and priority behavior; **S26 is
   resolved** from source; **S14 is re-opened as [V]**.
+
+## v1.0.2 erratum (2026-11-24, from the delta review of the P3 rework)
+
+- **S19** — a range-limited search falls through like any search; a find
+  beyond the range invalidates it and leaves the running task alone.
+- **S08 / S21** — a skipped request widens the processed search's range.
+- **S29** — after a slow abort the computed outcome is applied without a new
+  search; nothing is searched while a task is aborting.
+- **S54** — 5.8 keeps no stored previous result; the notify modes differ only
+  in whether a passing result also re-requests an executing branch.
+- **S09** — a parallel's background branch is searched on the update after the
+  main task, not in the same one.
+- **S62** — the restart on finish applies to any root completion, not only to
+  "nothing executable".
+- **S01, S02, S07, S13, S37, S46, S47, S53** — wording and sketches aligned
+  with the above (stale "LP re-search", "every search begins at the Root",
+  S37's self-contradictory sketch).
+- Legal: engine identifiers and verbatim strings were replaced by file:line
+  citations throughout the spec, the format document and the test runtime.
 
 ## Engine pin
 

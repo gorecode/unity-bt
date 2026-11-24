@@ -115,9 +115,9 @@ and the analyzer that enforces it.
 - [ ] P1: toy works on 6.6; ≤ 1 day of adapter-scope fixes to rebuild on 6.7 beta
 - [ ] R2: spec sign-offs (human + second agent) recorded; coverage table complete
 - [x] R3: donor decision recorded (done)
-- [x] P3: harness green on trivial trees (33 scenarios passing on the naive
-  reference runtime, whose update model was rebuilt from UE source after the
-  harness review); scenario format covers every traceable R2 statement
+- [x] P3: harness green on trivial trees (36 scenarios passing on the naive
+  reference runtime, whose update model was rebuilt from UE source after two
+  harness reviews); scenario format covers every traceable R2 statement
   (coverage enforced by `Scenarios_CoverEveryTraceableSpecStatement`); 18
   scenario classes enumerated in `docs/r7-sandbox-plan.md`; format documented
   in `docs/golden-format.md`

@@ -88,6 +88,25 @@
       ]}
     },
     {
+      "id": "S33-tick-on-search-start",
+      "title": "[V] Call Tick on Search Start: the service ticks immediately when a search enters its node, before the child runs (callback ordering: sandbox S33)",
+      "statements": ["S33"],
+      "requires": ["sequence", "instantTask", "service", "verify:S33"],
+      "tree": {
+        "root": "seq",
+        "nodes": {
+          "seq": { "type": "Sequence", "children": ["a"], "services": ["s"] },
+          "s": { "type": "Service", "interval": 1, "tickOnSearchStart": true },
+          "a": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "stimulus": ["start", "settle"],
+      "expected": { "updates": [
+        ["search:root", "seq.activate", "s.activate", "s.tick", "a.activate", "a.finish:Success"],
+        ["search:seq", "s.deactivate", "seq.complete:Success"]
+      ]}
+    },
+    {
       "id": "S53-service-continuous-on-research",
       "title": "[V] A re-search that re-selects the active path neither re-activates services nor resets their timers (sandbox S53)",
       "statements": ["S53"],

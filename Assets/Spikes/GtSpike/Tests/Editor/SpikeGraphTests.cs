@@ -9,16 +9,30 @@ using UnityEngine;
 namespace Gorecode.Bt.Spikes.GtSpike.Tests
 {
     // P1 spike: proves GTK authoring + serialization round-trips headlessly.
-    // Artifacts are left in TestArtifacts for the screenshot pass.
+    // The graphs it creates are deleted again; nothing is kept under TestArtifacts.
     public class SpikeGraphTests
     {
-        const string k_SubGraphPath = "Assets/Spikes/GtSpike/TestArtifacts/SubGraph.gtspike";
-        const string k_MainGraphPath = "Assets/Spikes/GtSpike/TestArtifacts/MainGraph.gtspike";
+        const string k_ArtifactsDir = "Assets/Spikes/GtSpike/TestArtifacts";
+        const string k_SubGraphPath = k_ArtifactsDir + "/SubGraph.gtspike";
+        const string k_MainGraphPath = k_ArtifactsDir + "/MainGraph.gtspike";
+
+        [TearDown]
+        public void DeleteArtifacts()
+        {
+            AssetDatabase.DeleteAsset(k_MainGraphPath);
+            AssetDatabase.DeleteAsset(k_SubGraphPath);
+            if (Directory.Exists(k_ArtifactsDir))
+            {
+                AssetDatabase.DeleteAsset(k_ArtifactsDir);
+            }
+
+            AssetDatabase.Refresh();
+        }
 
         [Test]
         public void GraphToolkit_SpikeAuthoringRoundTrips()
         {
-            Directory.CreateDirectory("Assets/Spikes/GtSpike/TestArtifacts");
+            Directory.CreateDirectory(k_ArtifactsDir);
 
             var sub = GraphDatabase.CreateGraph<SpikeGraph>(k_SubGraphPath);
             Assert.That(sub, Is.Not.Null);

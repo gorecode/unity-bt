@@ -41,7 +41,7 @@
         ["bb.write:K=1", "g.observe", "g.fail"],
         ["search:seq", "w.abort"],
         ["w.finish:Aborted"],
-        ["search:seq", "seq.complete:Failure"]
+        ["seq.complete:Failure"]
       ]}
     },
     {

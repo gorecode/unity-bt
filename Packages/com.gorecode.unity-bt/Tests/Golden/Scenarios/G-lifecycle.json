@@ -22,9 +22,9 @@
       },
       "stimulus": ["start", "settle"],
       "expected": { "updates": [
-        ["search:root", "seq.activate", "sub.activate", "sub/inner.activate", "sub/x.activate", "sub/x.finish:Success"],
-        ["search:sub/inner", "sub/inner.complete:Success", "sub.finish:Success"],
-        ["search:seq", "b.activate", "b.finish:Success"],
+        ["search:root", "seq.activate", "sub.activate"],
+        ["search:sub/inner", "sub/inner.activate", "sub/x.activate", "sub/x.finish:Success"],
+        ["search:sub/inner", "sub/inner.complete:Success", "sub.finish:Success", "b.activate", "b.finish:Success"],
         ["search:seq", "seq.complete:Success"]
       ]}
     },
@@ -52,9 +52,9 @@
       },
       "stimulus": ["inject:patrol:patrolA", "start", "settle"],
       "expected": { "updates": [
-        ["search:root", "seq.activate", "dyn.activate", "patrolA/inner.activate", "patrolA/x.activate", "patrolA/x.finish:Success"],
-        ["search:patrolA/inner", "patrolA/inner.complete:Success", "dyn.finish:Success"],
-        ["search:seq", "b.activate", "b.finish:Success"],
+        ["search:root", "seq.activate", "dyn.activate"],
+        ["search:patrolA/inner", "patrolA/inner.activate", "patrolA/x.activate", "patrolA/x.finish:Success"],
+        ["search:patrolA/inner", "patrolA/inner.complete:Success", "dyn.finish:Success", "b.activate", "b.finish:Success"],
         ["search:seq", "seq.complete:Success"]
       ]}
     },
@@ -87,12 +87,13 @@
           "b": { "type": "InstantTask", "result": "Success" }
         }
       },
-      "stimulus": ["start", "tick", "inject:patrol:patrolA", "tick", "settle"],
+      "stimulus": ["start", "tick", "tick", "inject:patrol:patrolA", "tick", "tick", "settle"],
       "expected": { "updates": [
-        ["search:root", "seq.activate", "dyn.activate", "idleTree/inner.activate", "idleTree/w.activate"],
-        ["idleTree/w.abort", "idleTree/w.finish:Aborted", "dyn.finish:Aborted", "dyn.activate", "patrolA/inner.activate", "patrolA/x.activate", "patrolA/x.finish:Success"],
-        ["search:patrolA/inner", "patrolA/inner.complete:Success", "dyn.finish:Success"],
-        ["search:seq", "b.activate", "b.finish:Success"],
+        ["search:root", "seq.activate", "dyn.activate"],
+        ["search:idleTree/inner", "idleTree/inner.activate", "idleTree/w.activate"],
+        ["idleTree/w.abort", "idleTree/w.finish:Aborted", "dyn.finish:Aborted", "dyn.activate"],
+        ["search:patrolA/inner", "patrolA/inner.activate", "patrolA/x.activate", "patrolA/x.finish:Success"],
+        ["search:patrolA/inner", "patrolA/inner.complete:Success", "dyn.finish:Success", "b.activate", "b.finish:Success"],
         ["search:seq", "seq.complete:Success"]
       ]}
     },
@@ -117,7 +118,7 @@
     },
     {
       "id": "S47-root-decorators-of-subtree",
-      "title": "A subtree's root decorators act like decorators on the subtree task in the parent tree",
+      "title": "A subtree's root decorators act like decorators on the subtree task in the parent tree; a Self abort finishes the subtree task with Failure",
       "statements": ["S47"],
       "requires": ["sequence", "latentTask", "subtree", "blackboardDecorator", "observerAbort.self"],
       "tree": {
@@ -136,11 +137,12 @@
         }
       },
       "blackboard": { "K": 1 },
-      "stimulus": ["start", "tick", "clear:K", "tick", "settle"],
+      "stimulus": ["start", "tick", "tick", "clear:K", "tick", "settle"],
       "expected": { "updates": [
-        ["search:root", "seq.activate", "sub#rg.pass", "sub.activate", "sub/inner.activate", "sub/w.activate"],
+        ["search:root", "seq.activate", "sub#rg.pass", "sub.activate"],
+        ["search:sub/inner", "sub/inner.activate", "sub/w.activate"],
         ["bb.clear:K", "sub#rg.observe", "sub#rg.fail"],
-        ["search:seq", "sub/w.abort", "sub/w.finish:Aborted", "sub.finish:Aborted", "seq.complete:Failure"]
+        ["search:seq", "sub/w.abort", "sub/w.finish:Aborted", "sub.finish:Failure", "seq.complete:Failure"]
       ]}
     },
     {
@@ -165,15 +167,15 @@
       },
       "stimulus": ["start", "settle"],
       "expected": { "updates": [
-        ["search:root", "seq.activate", "sub.activate", "sub/inner.activate", "sub/x.activate", "bb.write:K=1", "sub/x.finish:Success"],
-        ["search:sub/inner", "sub/inner.complete:Success", "sub.finish:Success"],
-        ["search:seq", "g.pass", "c.activate", "c.finish:Success"],
+        ["search:root", "seq.activate", "sub.activate"],
+        ["search:sub/inner", "sub/inner.activate", "sub/x.activate", "bb.write:K=1", "sub/x.finish:Success"],
+        ["search:sub/inner", "sub/inner.complete:Success", "sub.finish:Success", "g.pass", "c.activate", "c.finish:Success"],
         ["search:seq", "seq.complete:Success"]
       ]}
     },
     {
       "id": "S62-restart-on-exhaustion",
-      "title": "Looped mode: when a search finds no executable branch every auxiliary node is unregistered and the tree re-searches from the root on the next update",
+      "title": "Looped mode: when the tree finishes every observer is unregistered and the tree re-searches from the root on the next update",
       "statements": ["S62"],
       "requires": ["selector", "instantTask", "blackboard", "blackboardDecorator", "observerAbort.lowerPriority", "loopedExecution"],
       "loop": true,

@@ -9,12 +9,11 @@ namespace Gorecode.Bt.Tests.Golden
     /// <summary>
     /// Naive reference runtime used only to validate the golden harness (P3).
     /// Not the product runtime: it trades structure for readability and has no
-    /// zero-alloc constraints. Its update model mirrors UE 5.8's component loop as
-    /// read from source: a search only finds the next task, then the current task
-    /// is aborted if the search moved away, then exactly one task executes
-    /// (BehaviorTreeComponent.cpp:2094-2222); every request is deferred to the
-    /// next update. Phase 1's runtime must pass the same scenarios; this class is
-    /// then deleted.
+    /// zero-alloc constraints. Its update model follows UE 5.8's component loop as
+    /// read from source (docs/golden-format.md, "Update model"): a search only
+    /// finds the next task, the current task is then aborted if the search moved
+    /// away from it, and at most one task executes per update. Phase 1's runtime
+    /// must pass the same scenarios; this class is then deleted.
     /// </summary>
     public sealed class NaiveReferenceRuntime : IGoldenRuntime
     {
@@ -30,9 +29,11 @@ namespace Gorecode.Bt.Tests.Golden
 
         const int k_NoChild = -2;
         const int k_None = -1;
+        const int k_Unbounded = int.MaxValue;
 
         enum St { Idle, Running, Success, Failure }
 
+        /// <summary>Root (start or restart), Continue (a child's result is applied at its parent), BranchStart (an observer asks for one branch, range-limited).</summary>
         enum ReqKind { Root, Continue, BranchStart }
 
         abstract class N
@@ -48,14 +49,14 @@ namespace Gorecode.Bt.Tests.Golden
         {
             public readonly List<N> Children = new List<N>();
             public int ActiveIndex = k_None;
-            public int OverrideChild = k_None;
+            public int RepeatChild = k_None;
         }
 
         sealed class Dec : N
         {
             public N Child;
-            public bool AbortSelf, AbortLower, OnValueChange, LastResult;
-            public string Key, Query, Mode, ForceResult;
+            public bool AbortSelf, AbortLower, RestartWhenPassing;
+            public string Key, Query, Mode, ForcedResult;
             public JToken QueryValue;
             public double Seconds, Timeout, LastExit = -1e9, StartedAt;
             public int Count, Remaining, TimerId = -1;
@@ -76,6 +77,8 @@ namespace Gorecode.Bt.Tests.Golden
             public Comp Start;
             public int ChildIdx;
             public string Result;
+            /// <summary>Exclusive upper bound (pre-order priority) on the task the search may select.</summary>
+            public int RangeEnd = k_Unbounded;
         }
 
         sealed class Completion
@@ -91,6 +94,8 @@ namespace Gorecode.Bt.Tests.Golden
             public readonly List<Comp> Path = new List<Comp>();
             public readonly List<int> PathIdx = new List<int>();
             public readonly List<Completion> Completions = new List<Completion>();
+            public readonly List<KeyValuePair<Dec, bool>> ObserverChanges = new List<KeyValuePair<Dec, bool>>();
+            public readonly List<Action> Deferred = new List<Action>();
             public readonly List<Action> Undo = new List<Action>();
         }
 
@@ -105,17 +110,18 @@ namespace Gorecode.Bt.Tests.Golden
         Comp m_RootComp;
         readonly Dictionary<string, N> m_Nodes = new Dictionary<string, N>();
         readonly Dictionary<string, JToken> m_Blackboard = new Dictionary<string, JToken>();
-        readonly List<Dec> m_Armed = new List<Dec>();
+        readonly List<Dec> m_Observers = new List<Dec>();
         readonly List<Timer> m_Timers = new List<Timer>();
         Req m_Pending;
+        Req m_RequestAfterAbort;
+        SearchResult m_Stored;
         Tsk m_ActiveTask;
         bool m_Looped;
         bool m_AbortInProgress;
-        Req m_Deferred;
         double m_Clock;
         int m_NextTimerId;
 
-        public bool HasPendingRequests => m_Pending != null;
+        public bool HasPendingRequests => m_Pending != null || (m_Stored != null && !m_AbortInProgress);
 
         // ---------------------------------------------------------------- loading
 
@@ -123,12 +129,13 @@ namespace Gorecode.Bt.Tests.Golden
         {
             m_Nodes.Clear();
             m_Blackboard.Clear();
-            m_Armed.Clear();
+            m_Observers.Clear();
             m_Timers.Clear();
             m_Pending = null;
+            m_RequestAfterAbort = null;
+            m_Stored = null;
             m_ActiveTask = null;
             m_AbortInProgress = false;
-            m_Deferred = null;
             m_Clock = 0;
             m_NextTimerId = 0;
             m_Looped = loopedExecution;
@@ -193,7 +200,7 @@ namespace Gorecode.Bt.Tests.Golden
                                 d.QueryValue = q["value"];
                             }
 
-                            d.OnValueChange = (string)def["notify"] == "OnValueChange";
+                            d.RestartWhenPassing = (string)def["notify"] == "OnValueChange";
                             switch ((string)def["abort"] ?? "None")
                             {
                                 case "Self": d.AbortSelf = true; break;
@@ -214,7 +221,7 @@ namespace Gorecode.Bt.Tests.Golden
                             d.Seconds = (double)def["seconds"];
                             break;
                         case "ForceResultDecorator":
-                            d.ForceResult = (string)def["result"];
+                            d.ForcedResult = (string)def["result"];
                             break;
                     }
 
@@ -282,8 +289,9 @@ namespace Gorecode.Bt.Tests.Golden
         {
             if (step == "start")
             {
-                // RestartTree: force a root re-evaluation (BehaviorTreeComponent.cpp:472-477).
-                m_Pending = new Req { Kind = ReqKind.Root };
+                // A restart forces a root search [src: BehaviorTreeComponent.cpp:472-477].
+                // It goes through the request queue so that it waits for a slow abort.
+                Queue(new Req { Kind = ReqKind.Root });
                 return;
             }
 
@@ -343,6 +351,16 @@ namespace Gorecode.Bt.Tests.Golden
 
         public void Tick(List<string> seg)
         {
+            // After a slow abort the already-computed outcome is applied without a
+            // new search [src: BehaviorTreeComponent.cpp:562-566, 2232-2279].
+            if (m_Stored != null && !m_AbortInProgress)
+            {
+                var stored = m_Stored;
+                m_Stored = null;
+                Apply(stored, seg);
+                return;
+            }
+
             if (m_Pending == null)
             {
                 return;
@@ -360,27 +378,54 @@ namespace Gorecode.Bt.Tests.Golden
                 return;
             }
 
-            // A search that selects a running KeepRunning task was already discarded;
-            // any other valid search replaces or restarts the current task.
             if (m_ActiveTask != null)
             {
+                // A valid search replaces or restarts the current task: abort it first
+                // [src: BehaviorTreeComponent.cpp:2200-2212].
                 var current = m_ActiveTask;
                 m_ActiveTask = null;
-                UnregisterFrom(sr.Task);
-                var delayed = AbortTask(current, seg);
-                ResetPathOf(current);
-                if (delayed)
+                LeaveBranch(current);
+                ResetActiveIndexes(current);
+                if (AbortTask(current, seg, false))
                 {
-                    // Latent abort: the tree keeps its state until the abort finishes,
-                    // then the same request is searched again.
-                    Undo(sr.Undo);
+                    // Slow abort: the tree keeps its state until the abort completes
+                    // [src: BehaviorTreeComponent.cpp:2175-2179].
                     m_AbortInProgress = true;
-                    m_Deferred = req;
+                    m_Stored = sr;
                     return;
                 }
             }
 
+            Apply(sr, seg);
+        }
+
+        /// <summary>Applies a valid search: observer bookkeeping, completions, the new path, one task.</summary>
+        void Apply(SearchResult sr, List<string> seg)
+        {
+            // Observers below the new task's position are removed at every task
+            // execution [src: BehaviorTreeComponent.cpp:2245-2248], then the search's
+            // own observer changes are applied [src: BehaviorTreeComponent.cpp:2253-2254].
+            // A search that found nothing registers nobody [src: BehaviorTreeComponent.cpp:1498-1508].
+            RemoveObserversBelow(sr.Task);
             Commit(sr.Undo);
+            if (sr.Task != null)
+            {
+                foreach (var change in sr.ObserverChanges)
+                {
+                    if (change.Value)
+                    {
+                        if (!m_Observers.Contains(change.Key))
+                        {
+                            m_Observers.Add(change.Key);
+                        }
+                    }
+                    else
+                    {
+                        m_Observers.Remove(change.Key);
+                    }
+                }
+            }
+
             foreach (var completion in sr.Completions)
             {
                 if (completion.Node.State == St.Running)
@@ -390,6 +435,11 @@ namespace Gorecode.Bt.Tests.Golden
 
                 completion.Node.State = Map(completion.Result);
                 completion.Node.ActiveIndex = k_None;
+            }
+
+            foreach (var deferred in sr.Deferred)
+            {
+                deferred();
             }
 
             if (sr.Task == null)
@@ -421,38 +471,35 @@ namespace Gorecode.Bt.Tests.Golden
 
             var idx = k_None;
             string last = null;
-            var bounded = req.Kind == ReqKind.BranchStart;
             var first = true;
             Enter(cur, seg, sr);
 
             while (true)
             {
                 int next;
-                bool viaOverride;
+                bool repeated;
                 if (first && req.Kind == ReqKind.Continue)
                 {
-                    // Leaving child req.ChildIdx with req.Result (NotifyDecoratorsOnDeactivation).
-                    last = ProcessDeactivation(cur, req.ChildIdx, req.Result, sr.Undo);
+                    // The finished child's result is processed at its parent.
+                    last = OnLeaveLink(cur, req.ChildIdx, req.Result, sr);
                     idx = req.ChildIdx;
-                    next = NextChild(cur, idx, last, out viaOverride);
+                    next = NextChild(cur, idx, last, out repeated);
                 }
-                else if (first && bounded)
+                else if (first && req.Kind == ReqKind.BranchStart)
                 {
-                    // The search begins at the decorated branch and is limited to it.
                     next = req.ChildIdx;
-                    viaOverride = false;
+                    repeated = false;
                 }
                 else
                 {
-                    next = NextChild(cur, idx, last, out viaOverride);
+                    next = NextChild(cur, idx, last, out repeated);
                 }
 
                 first = false;
                 if (next == k_NoChild)
                 {
-                    // The composite ends with the result that ended it (selector: a child's
-                    // success; sequence: a child's failure), or with its default when it ran
-                    // out of children.
+                    // A composite ends with the result that ended it, or with its
+                    // default when it ran out of children.
                     var compositeResult = last ?? (cur.Type == "Selector" ? "Failure" : "Success");
                     sr.Completions.Add(new Completion { Node = cur, Result = compositeResult });
                     var parent = LinkOwner(cur);
@@ -463,10 +510,9 @@ namespace Gorecode.Bt.Tests.Golden
                     }
 
                     var linkIdx = LinkIndex(cur);
-                    last = ProcessDeactivation(parent, linkIdx, compositeResult, sr.Undo);
+                    last = OnLeaveLink(parent, linkIdx, compositeResult, sr);
                     idx = linkIdx;
                     cur = parent;
-                    bounded = false;
                     continue;
                 }
 
@@ -474,18 +520,11 @@ namespace Gorecode.Bt.Tests.Golden
                 {
                     idx = next;
                     last = "Failure";
-                    NotifyFailedActivation(cur, next, sr.Undo);
-                    if (bounded)
-                    {
-                        // Nothing executable inside the requested range.
-                        sr.Task = null;
-                        return sr;
-                    }
-
+                    OnLinkBlocked(cur, next, sr);
                     continue;
                 }
 
-                NotifyActivation(cur, next, viaOverride, sr.Undo);
+                OnEnterLink(cur, next, repeated, sr);
                 sr.Path.Add(cur);
                 sr.PathIdx.Add(next);
                 if (Inner(cur.Children[next]) is Tsk task)
@@ -498,11 +537,12 @@ namespace Gorecode.Bt.Tests.Golden
                 Enter(cur, seg, sr);
                 idx = k_None;
                 last = null;
-                bounded = false;
             }
 
-            // "Task doesn't allow restart and it's already running! Discarding search."
-            if (sr.Task == m_ActiveTask && sr.Task.KeepRunning)
+            // The task must lie inside the requested range [src: BehaviorTreeComponent.cpp:2156-2160],
+            // and a running task that refuses restarts makes the search unusable
+            // [src: BehaviorTreeComponent.cpp:2162-2172].
+            if (sr.Task.Prio >= req.RangeEnd || (sr.Task == m_ActiveTask && sr.Task.KeepRunning))
             {
                 sr.Valid = false;
             }
@@ -510,15 +550,15 @@ namespace Gorecode.Bt.Tests.Golden
             return sr;
         }
 
-        int NextChild(Comp cur, int lastChildIdx, string lastResult, out bool viaOverride)
+        int NextChild(Comp cur, int lastChildIdx, string lastResult, out bool repeated)
         {
-            viaOverride = false;
-            if (cur.OverrideChild != k_None)
+            repeated = false;
+            if (cur.RepeatChild != k_None)
             {
-                viaOverride = true;
-                var overridden = cur.OverrideChild;
-                cur.OverrideChild = k_None;
-                return overridden;
+                repeated = true;
+                var repeatedChild = cur.RepeatChild;
+                cur.RepeatChild = k_None;
+                return repeatedChild;
             }
 
             if (lastChildIdx == k_None)
@@ -545,7 +585,6 @@ namespace Gorecode.Bt.Tests.Golden
                 {
                     case "BlackboardDecorator":
                         pass = Eval(d);
-                        d.LastResult = pass;
                         break;
                     case "CooldownDecorator":
                         pass = m_Clock >= d.LastExit + d.Seconds - 1e-9;
@@ -558,94 +597,90 @@ namespace Gorecode.Bt.Tests.Golden
                 E(seg, d.Id, pass ? "pass" : "fail");
                 if (!pass)
                 {
-                    return false; // attachment order with short-circuit (BTCompositeNode.cpp:454-478)
+                    return false; // attachment order with short-circuit [src: BTCompositeNode.cpp:454-478]
                 }
             }
 
             return true;
         }
 
-        void NotifyActivation(Comp owner, int childIdx, bool viaOverride, List<Action> undo)
+        /// <summary>A search enters a child link: observers are armed per abort mode, timers and loop counters start.</summary>
+        void OnEnterLink(Comp owner, int childIdx, bool repeated, SearchResult sr)
         {
             foreach (var d in DecoratorChain(owner.Children[childIdx]))
             {
                 switch (d.Type)
                 {
                     case "BlackboardDecorator":
+                        // Self / Both observe while their branch runs; LowerPriority does not
+                        // [src: BTCompositeNode.cpp:227-250].
                         if (d.AbortSelf)
                         {
-                            Arm(d, undo); // Self / Both
+                            sr.ObserverChanges.Add(new KeyValuePair<Dec, bool>(d, true));
                         }
 
                         if (d.AbortLower && !d.AbortSelf)
                         {
-                            Disarm(d, undo); // LowerPriority
+                            sr.ObserverChanges.Add(new KeyValuePair<Dec, bool>(d, false));
                         }
 
                         break;
                     case "TimeLimitDecorator":
-                    {
-                        var saved = d.TimerId;
-                        var id = -1;
-                        id = AddTimer(m_Clock + d.Seconds, s =>
-                        {
-                            if (d.TimerId == id)
-                            {
-                                Queue(new Req { Kind = ReqKind.Continue, Start = LinkOwner(d), ChildIdx = LinkIndex(d), Result = "Failure" });
-                            }
-                        });
-                        d.TimerId = id;
-                        undo.Add(() => { Disarm(id); d.TimerId = saved; });
+                        // The limit is re-armed every time the branch is entered (S24). It is
+                        // armed when the search's data is applied — after the abort of the
+                        // task the search replaces [src: BehaviorTreeComponent.cpp:2253-2254].
+                        sr.Deferred.Add(() => ArmTimeLimit(d));
                         break;
-                    }
-
                     case "LoopDecorator":
                     {
                         var savedRemaining = d.Remaining;
                         var savedStarted = d.StartedAt;
-                        var savedOverride = owner.OverrideChild;
-                        if (!viaOverride)
+                        var savedRepeat = owner.RepeatChild;
+                        if (!repeated)
                         {
                             d.Remaining = d.Count;
                             d.StartedAt = m_Clock;
                         }
 
                         d.Remaining--;
-                        var shouldLoop = d.Mode == "Infinite"
+                        var again = d.Mode == "Infinite"
                             ? d.Timeout < 0 || m_Clock < d.StartedAt + d.Timeout - 1e-9
                             : d.Remaining > 0;
-                        if (shouldLoop)
+                        if (again)
                         {
-                            owner.OverrideChild = childIdx;
+                            owner.RepeatChild = childIdx;
                         }
 
-                        undo.Add(() => { d.Remaining = savedRemaining; d.StartedAt = savedStarted; owner.OverrideChild = savedOverride; });
+                        sr.Undo.Add(() => { d.Remaining = savedRemaining; d.StartedAt = savedStarted; owner.RepeatChild = savedRepeat; });
                         break;
                     }
                 }
             }
         }
 
-        void NotifyFailedActivation(Comp owner, int childIdx, List<Action> undo)
+        /// <summary>A child link failed its entry checks: LowerPriority / Both observers arm [src: BTCompositeNode.cpp:297-315].</summary>
+        static void OnLinkBlocked(Comp owner, int childIdx, SearchResult sr)
         {
             foreach (var d in DecoratorChain(owner.Children[childIdx]))
             {
                 if (d.Type == "BlackboardDecorator" && d.AbortLower)
                 {
-                    Arm(d, undo); // LowerPriority / Both
+                    sr.ObserverChanges.Add(new KeyValuePair<Dec, bool>(d, true));
                 }
             }
         }
 
-        /// <summary>Regular deactivation of a child link; returns the result after decorator processing.</summary>
-        string ProcessDeactivation(Comp owner, int childIdx, string result, List<Action> undo)
+        /// <summary>A child link is left with a result; returns the result after decorator processing.</summary>
+        string OnLeaveLink(Comp owner, int childIdx, string result, SearchResult sr)
         {
             foreach (var d in DecoratorChain(owner.Children[childIdx]))
             {
                 switch (d.Type)
                 {
                     case "ForceResultDecorator":
-                        if (result == "Failure" && d.ForceResult == "Success")
+                        // Converts failure at completion and the failure delivered by a
+                        // Self abort [src: BTDecorator_ForceSuccess.cpp:21-43].
+                        if (result == "Failure" && d.ForcedResult == "Success")
                         {
                             result = "Success";
                         }
@@ -653,28 +688,30 @@ namespace Gorecode.Bt.Tests.Golden
                         break;
                     case "CooldownDecorator":
                     {
-                        var saved = d.LastExit;
+                        var savedExit = d.LastExit;
                         d.LastExit = m_Clock;
-                        undo.Add(() => d.LastExit = saved);
+                        sr.Undo.Add(() => d.LastExit = savedExit);
                         break;
                     }
 
                     case "TimeLimitDecorator":
                     {
-                        var saved = d.TimerId;
+                        var savedTimer = d.TimerId;
                         Disarm(d);
-                        undo.Add(() => d.TimerId = saved);
+                        sr.Undo.Add(() => d.TimerId = savedTimer);
                         break;
                     }
 
                     case "BlackboardDecorator":
+                        // Self observers are out of scope once their branch is left;
+                        // LowerPriority observers re-arm [src: BTCompositeNode.cpp:281-292].
                         if (d.AbortSelf && !d.AbortLower)
                         {
-                            Disarm(d, undo); // Self observers are out of scope once the branch is left
+                            sr.ObserverChanges.Add(new KeyValuePair<Dec, bool>(d, false));
                         }
                         else if (d.AbortLower && !d.AbortSelf)
                         {
-                            Arm(d, undo); // LowerPriority observers re-arm when their branch is left
+                            sr.ObserverChanges.Add(new KeyValuePair<Dec, bool>(d, true));
                         }
 
                         break;
@@ -705,6 +742,7 @@ namespace Gorecode.Bt.Tests.Golden
 
             if (t.Type == "InstantTask")
             {
+                // The result only schedules the next update [src: BehaviorTreeComponent.cpp:557-561].
                 E(seg, t.Id, "finish", t.Result);
                 t.State = Map(t.Result);
                 Queue(new Req { Kind = ReqKind.Continue, Start = LinkOwner(t), ChildIdx = LinkIndex(t), Result = t.Result });
@@ -736,23 +774,26 @@ namespace Gorecode.Bt.Tests.Golden
             Queue(new Req { Kind = ReqKind.Continue, Start = LinkOwner(t), ChildIdx = LinkIndex(t), Result = result });
         }
 
-        /// <summary>Aborts a task; returns true when the abort is latent (completes later).</summary>
-        bool AbortTask(Tsk t, List<string> seg)
+        /// <summary>Aborts a task; returns true when the abort completes on a later update.</summary>
+        bool AbortTask(Tsk t, List<string> seg, bool forceImmediate)
         {
             E(seg, t.Id, "abort");
             Disarm(t.TimerId);
             t.TimerId = -1;
-            if (t.AbortDelay > 0)
+            if (!forceImmediate && t.AbortDelay > 0)
             {
                 AddTimer(m_Clock + t.AbortDelay, s =>
                 {
                     E(s, t.Id, "finish", "Aborted");
                     t.State = St.Idle;
                     m_AbortInProgress = false;
-                    if (m_Deferred != null)
+                    if (m_RequestAfterAbort != null)
                     {
-                        m_Pending = m_Deferred;
-                        m_Deferred = null;
+                        // A request that arrived during the abort runs next, with its
+                        // range limit removed [src: BehaviorTreeComponent.cpp:1786-1799].
+                        m_RequestAfterAbort.RangeEnd = k_Unbounded;
+                        m_Pending = m_RequestAfterAbort;
+                        m_RequestAfterAbort = null;
                     }
                 });
                 return true;
@@ -763,16 +804,49 @@ namespace Gorecode.Bt.Tests.Golden
             return false;
         }
 
+        /// <summary>Timed decorators on the abandoned branch stop with it (a time limit re-arms on re-entry, S24; a cooldown starts, S22).</summary>
+        void LeaveBranch(Tsk t)
+        {
+            for (var p = t.Parent; p != null; p = p.Parent)
+            {
+                if (p is Dec d)
+                {
+                    if (d.Type == "TimeLimitDecorator")
+                    {
+                        Disarm(d);
+                    }
+                    else if (d.Type == "CooldownDecorator")
+                    {
+                        d.LastExit = m_Clock;
+                    }
+                }
+            }
+        }
+
+        void ArmTimeLimit(Dec d)
+        {
+            Disarm(d);
+            var id = -1;
+            id = AddTimer(m_Clock + d.Seconds, s =>
+            {
+                if (d.TimerId == id)
+                {
+                    Queue(new Req { Kind = ReqKind.Continue, Start = LinkOwner(d), ChildIdx = LinkIndex(d), Result = "Failure" });
+                }
+            });
+            d.TimerId = id;
+        }
+
         void OnExhausted()
         {
-            // Ran out of nodes: every auxiliary node is unregistered; looped mode
-            // re-requests a root search for the next update (BehaviorTreeComponent.cpp:585-613).
-            m_Armed.Clear();
+            // The tree finished: every observer is unregistered; looped mode asks for
+            // a root search on the next update [src: BehaviorTreeComponent.cpp:585-613].
+            m_Observers.Clear();
             foreach (var n in m_Nodes.Values.OfType<Comp>())
             {
                 n.State = St.Idle;
                 n.ActiveIndex = k_None;
-                n.OverrideChild = k_None;
+                n.RepeatChild = k_None;
             }
 
             if (m_Looped)
@@ -785,7 +859,7 @@ namespace Gorecode.Bt.Tests.Golden
         {
             if (m_ActiveTask != null)
             {
-                AbortTask(m_ActiveTask, seg);
+                AbortTask(m_ActiveTask, seg, true);
                 m_ActiveTask = null;
             }
 
@@ -793,13 +867,14 @@ namespace Gorecode.Bt.Tests.Golden
             {
                 n.State = St.Idle;
                 n.ActiveIndex = k_None;
-                n.OverrideChild = k_None;
+                n.RepeatChild = k_None;
             }
 
             m_Timers.Clear();
-            m_Armed.Clear();
+            m_Observers.Clear();
             m_Pending = null;
-            m_Deferred = null;
+            m_RequestAfterAbort = null;
+            m_Stored = null;
             m_AbortInProgress = false;
         }
 
@@ -807,22 +882,19 @@ namespace Gorecode.Bt.Tests.Golden
 
         void Notify(string key, List<string> seg)
         {
-            foreach (var d in m_Armed.ToList())
+            foreach (var d in m_Observers.ToList())
             {
                 if (d.Type != "BlackboardDecorator" || d.Key != key)
                 {
                     continue;
                 }
 
+                // Every notification evaluates the condition; the two notify modes differ
+                // only in whether a passing result also re-requests an executing branch
+                // [src: BTDecorator_Blackboard.cpp:60-77, BTDecorator.cpp:88-120].
                 var pass = Eval(d);
-                if (!d.OnValueChange && pass == d.LastResult)
-                {
-                    continue; // OnResultChange: request only when the result flips
-                }
-
                 E(seg, d.Id, "observe");
                 E(seg, d.Id, pass ? "pass" : "fail");
-                d.LastResult = pass;
 
                 var owner = LinkOwner(d);
                 if (owner == null)
@@ -835,24 +907,52 @@ namespace Gorecode.Bt.Tests.Golden
                 {
                     if (executing)
                     {
-                        // RequestBranchDeactivation: the parent continues with a failed child.
                         Queue(new Req { Kind = ReqKind.Continue, Start = owner, ChildIdx = LinkIndex(d), Result = "Failure" });
                     }
                 }
-                else if (!executing || d.OnValueChange)
+                else if (!executing || d.RestartWhenPassing)
                 {
-                    // RequestBranchActivation: a search limited to the decorated branch; with
-                    // OnValueChange it also restarts an executing branch.
-                    Queue(new Req { Kind = ReqKind.BranchStart, Start = owner, ChildIdx = LinkIndex(d) });
+                    var branchIdx = LinkIndex(d);
+                    Queue(new Req
+                    {
+                        Kind = ReqKind.BranchStart,
+                        Start = owner,
+                        ChildIdx = branchIdx,
+                        RangeEnd = branchIdx + 1 < owner.Children.Count ? owner.Children[branchIdx + 1].Prio : k_Unbounded,
+                    });
                 }
             }
         }
 
-        /// <summary>A pending request of higher priority wins; the new one is skipped (BehaviorTreeComponent.cpp:1256-1281).</summary>
+        /// <summary>
+        /// Keeps the request with the higher-priority search start. A request skipped in
+        /// favor of the pending one still widens the pending request's search range
+        /// [src: BehaviorTreeComponent.cpp:1256-1281].
+        /// </summary>
         void Queue(Req req)
         {
+            if (m_AbortInProgress)
+            {
+                // Nothing is searched while a task is aborting; the request runs when the
+                // abort completes and the outcome computed before it is dropped
+                // [src: BehaviorTreeComponent.cpp:1432-1454].
+                if (m_Stored != null)
+                {
+                    Undo(m_Stored.Undo);
+                    m_Stored = null;
+                }
+
+                if (m_RequestAfterAbort == null || Key(m_RequestAfterAbort) > Key(req))
+                {
+                    m_RequestAfterAbort = req;
+                }
+
+                return;
+            }
+
             if (m_Pending != null && Key(m_Pending) < Key(req))
             {
+                m_Pending.RangeEnd = req.RangeEnd == k_Unbounded ? k_Unbounded : Math.Max(m_Pending.RangeEnd, req.RangeEnd);
                 return;
             }
 
@@ -864,47 +964,24 @@ namespace Gorecode.Bt.Tests.Golden
             return req.Kind == ReqKind.Root ? long.MinValue : ((long)req.Start.Prio << 20) + Math.Max(req.ChildIdx, 0);
         }
 
-        /// <summary>Unregisters observers at or below the new task's position (UnregisterAuxNodesUpTo).</summary>
-        void UnregisterFrom(Tsk newTask)
+        /// <summary>Removes observers positioned at or below the given task (all of them when there is none).</summary>
+        void RemoveObserversBelow(Tsk task)
         {
-            if (newTask == null)
+            if (task == null)
             {
-                m_Armed.Clear();
+                m_Observers.Clear();
                 return;
             }
 
-            var keep = new HashSet<Dec>(DecoratorChain(LinkRoot(newTask)));
-            var limit = LinkRoot(newTask).Prio;
-            for (var i = m_Armed.Count - 1; i >= 0; i--)
+            var ownLink = new HashSet<Dec>(DecoratorChain(LinkRoot(task)));
+            var limit = LinkRoot(task).Prio;
+            for (var i = m_Observers.Count - 1; i >= 0; i--)
             {
-                if (m_Armed[i].Prio > limit && !keep.Contains(m_Armed[i]))
+                if (m_Observers[i].Prio > limit && !ownLink.Contains(m_Observers[i]))
                 {
-                    m_Armed.RemoveAt(i);
+                    m_Observers.RemoveAt(i);
                 }
             }
-        }
-
-        void Arm(Dec d, List<Action> undo)
-        {
-            if (m_Armed.Contains(d))
-            {
-                return;
-            }
-
-            m_Armed.Add(d);
-            undo.Add(() => m_Armed.Remove(d));
-        }
-
-        void Disarm(Dec d, List<Action> undo)
-        {
-            var index = m_Armed.IndexOf(d);
-            if (index < 0)
-            {
-                return;
-            }
-
-            m_Armed.RemoveAt(index);
-            undo.Add(() => m_Armed.Insert(Math.Min(index, m_Armed.Count), d));
         }
 
         // ---------------------------------------------------------------- blackboard
@@ -1020,7 +1097,7 @@ namespace Gorecode.Bt.Tests.Golden
             return ((Comp)link.Parent).Children.IndexOf(link);
         }
 
-        void ResetPathOf(Tsk t)
+        void ResetActiveIndexes(Tsk t)
         {
             for (var n = t.Parent; n != null; n = n.Parent)
             {
@@ -1052,7 +1129,7 @@ namespace Gorecode.Bt.Tests.Golden
             }
         }
 
-        /// <summary>A search entering a composite activates it: UE calls OnNodeActivation while searching.</summary>
+        /// <summary>A search entering a composite activates it: the engine calls the composite's activation hook while searching.</summary>
         static void Enter(Comp c, List<string> seg, SearchResult sr)
         {
             if (c.State == St.Running)
