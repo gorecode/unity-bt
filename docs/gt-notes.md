@@ -75,24 +75,67 @@ After `ImportAsset(ForceUpdate)` the `.gtspike` main object becomes our compiled
 the natural home of the Phase-2 "graph → runtime compile step with actionable
 validation errors."**
 
-## Opening the graph window programmatically
+## Opening the graph window
 
-No public documented "open" API found. Working-but-incomplete path (verified):
+**The supported path works.** Double-clicking the asset — equivalently
+`AssetDatabase.OpenAsset` on its main object, which Graph Toolkit handles — opens
+a graph window with all nodes and wires. Verified 2026-11-24 on 6000.6.10f1.
 
-1. `Unity.GraphToolkit.Editor.GraphObject.LoadGraphObjectAtPath(path, typeof(TGraph))`
-   — public static, returns the wrapper (a `GraphObjectImp`).
-   Note: the `(string)` overload is **generic** (`LoadGraphObjectAtPath<T>`); via
-   reflection use the `(string, Type)` overload.
-2. `Unity.GraphToolkit.Editor.Implementation.GraphViewEditorWindowImp.ShowGraph(wrapper)`
-   — public static on an implementation-namespaced window class.
+**Correction of the first pass (2026-11-23).** The earlier finding blamed a
+reflection-based open (`GraphObject.LoadGraphObjectAtPath` +
+`GraphViewEditorWindowImp.ShowGraph`) for an empty canvas. That was wrong: the
+cause is the spike test re-creating the graph asset **at the same path while the
+editor runs** (`GraphDatabase.CreateGraph` over an existing file). Graph windows
+opened afterwards stay at "Graph Processing Pending" with no node views until the
+editor restarts. Reproduced with the reflection path, with `OpenAsset`, with
+horizontal and vertical ports, with and without node `OnEnable` overrides; gone
+after a restart. In the stuck state the view's idle timer runs but processing
+never completes. So:
 
-**Finding (three vision-reviewed runs):** `ShowGraph` opens a window titled with
-the asset name, the grid canvas renders, focus/maximize work — but the populated
-graph's nodes never appear (empty grid). The raw `ShowGraph` call is evidently not
-the full open pipeline; the supported flow (double-click / `[CustomEditor]` "Edit"
-button on the compiled runtime asset, mirroring Unity Behavior) is unverified and
-is a **Phase-2 opening task**. Headless authoring/import/round-trip are unaffected
-(test-proven).
+- a headless loop of "run the test → open the graph → capture" needs an editor
+  restart between the test and the capture;
+- product tests must not re-create graph assets under an open editor if anyone
+  is going to look at them (use fresh paths, or accept the restart).
+
+Screenshot command (Pipeline package, no foreground window needed):
+
+```
+unity command capture editor_window --window "<window title>" --output-path Artifacts/screenshots/<branch>/<name>.png --project-path <project>
+```
+
+It captures at the window's size, brings the tab forward while reading and
+restores the previous tab. `capture game_view` and `capture scene_view` exist
+too. In a fresh session the window can open zoomed far out; frame-all is the `A`
+key in the window (no public API found to trigger it from code).
+
+## Decorators: what Graph Toolkit can and cannot represent (2026-11-24)
+
+Checked against the 6000.6 and 6000.7 manuals and API reference.
+
+- **No edge-attached objects, in either version.** Nothing can hang on a wire the
+  way a UE decorator hangs on a branch. The node kinds are standard, context
+  (a container of block nodes), block, plus variable, constant and portal nodes.
+- **Unity Behavior does not do it either**: its guards ("Conditional Guard
+  (Modifier)") are inline nodes in the execution chain — the pattern this spike
+  uses (`Cooldown → Move To`), which is what makes the tree look bloated next to
+  UE.
+- **6000.6 (project floor):** a node is a title, ports and fixed typed option
+  fields. Decorators can only be separate chain nodes, or baked into a node type
+  as option fields (not composable, not stackable in order).
+- **6000.7** adds `NodeView<T>` — custom UI Toolkit controls inside a node, backed
+  by serialized fields of the node class, with undo, zoom level-of-detail and
+  culling hooks — plus custom right-click menu entries and per-data-type styles.
+  With it, decorators and services can be a serialized list on the node they
+  guard, drawn as a stack of rows with an add button. That is a **supported
+  approximation** of UE's attached decorators, drawn inside the node card rather
+  than on the wire. It is not available on the project floor.
+- 6000.7 also adds a State Machine API whose transitions carry conditions; it does
+  not apply to graphs.
+
+Other styling facts on 6000.6: `Node.Title` and `Node.Subtitle` are settable;
+`Node.DefaultColor` colors the strip on the node's top border; `AsVertical()`
+puts inputs on top and outputs at the bottom; `PortConnectorUI` is `Arrowhead`
+or `Circle`; there is no public icon API.
 
 ## Gotchas hit (all real, this session)
 
@@ -102,14 +145,21 @@ is a **Phase-2 opening task**. Headless authoring/import/round-trip are unaffect
    `gtk-index.md` first and follow its TOC.
 3. Stale `.meta`: after the importer lands, existing graph files keep `DefaultImporter`
    until an explicit `ImportAsset(…, ForceUpdate)`.
-4. `unity command script eval` **eats double quotes** in `--code`; avoid string
-   literals in eval (or write a real script file + menu item).
+4. `unity command script eval` strips plain double quotes in `--code`; write
+   `\"` inside a single-quoted PowerShell string to pass a C# string literal
+   (or write a real script file + menu item).
 5. CLI races after `Assets/Refresh`: menu/test commands issued during the recompile
    + domain reload fail (`menu not found`, `EDITOR_NOT_RUNNING`). Always
    `status --until-ready`, settle ~3 s, retry once.
 6. GTK logs "A new asset is created at the same path…" when tests re-create graph
    assets — benign (see `docs/console-allowlist.txt`).
 7. `LoadGraphObjectAtPath(string)` generic-vs-typed overload trap (above).
+8. `Node.OnEnable` is `public`; an override must be `public` too
+   (`protected override` fails with CS0507).
+9. A console check taken right after `Assets/Refresh` can miss compile errors
+   that arrive seconds later. Confirm with `unity recompile` and by checking a
+   fact that only the new code produces (a new menu item exists, new data in an
+   asset).
 
 ## 6.6 → 6.7 stability assessment (adapter-scope argument for the Phase-0 gate)
 
