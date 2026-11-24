@@ -1,8 +1,8 @@
-# UE5 Behavior Tree — Formal Specification (v1.0.2)
+# UE5 Behavior Tree — Formal Specification (v1.0.3)
 
 **Status:** v1.0 revised 2026-11-23 after the R2 second-agent review (findings
 B1–B11, N1–N10) and verification against UE 5.8 engine source (tag
-`5.8.0-release`, commit `7deeb413`); v1.0.1 and v1.0.2 (2026-11-24) apply the
+`5.8.0-release`, commit `7deeb413`); v1.0.1–v1.0.3 (2026-11-24) apply the
 errata found by the P3 harness reviews (see the changelog). **Pending:** human
 maintainer sign-off (R2 gate).
 
@@ -235,11 +235,14 @@ Decisions (v1.0):
   no abort; branch runs to completion.
 - **S18 [D]** — `AbortMode.Self`: while the branch executes, condition→false
   aborts the branch; the parent then continues as if the child had failed (the
-  request carries Failed: a sequence fails, a selector moves on). *(src-verified
-  [src: BehaviorTreeComponent.cpp:972].)*
+  request carries Failed: a sequence fails, a selector moves on). A guard that
+  passes again before its stop request is served turns that stop into a
+  restart of the branch. *(src-verified [src:
+  BehaviorTreeComponent.cpp:972, 1002, 1018-1022].)*
   *Stimulus:* running task under a Self-guard inside a sequence; observed key
   flips → *Trace:* next update: task abort + Finish(Aborted); sequence
-  completed with Failure.
+  completed with Failure. Key flipped back before that update → *Trace:*
+  task abort + Finish(Aborted), then the same task activates again.
 - **S19 [D]** — `AbortMode.LowerPriority`: while the decorated branch is *not*
   executing, a change that flips the decorator's observed *result* (per its
   `NotifyMode`, S54) triggers a search **limited to the decorated branch**
@@ -649,6 +652,16 @@ before the edit):
   S37's self-contradictory sketch).
 - Legal: engine identifiers and verbatim strings were replaced by file:line
   citations throughout the spec, the format document and the test runtime.
+
+## v1.0.3 erratum (2026-11-24, final delta review)
+
+- **S24** — the limit is re-armed only for a new relevance period. A restart
+  that re-selects the same running task is presumed **not** to re-arm it; this
+  is carried as a residual [V].
+- **S18 / S54** — a Self guard that passes again before its stop request is
+  served turns that stop into a restart of the branch.
+- **S19** — a range-limited search falls through like any search; a find
+  beyond the range is rolled back and leaves the running task untouched.
 
 ## Engine pin
 
