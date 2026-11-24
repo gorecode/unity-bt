@@ -1,0 +1,162 @@
+{
+  "scenarios": [
+    {
+      "id": "S09-parallel-activates-both",
+      "title": "SimpleParallel activates its main task and background branch together",
+      "statements": ["S09"],
+      "requires": ["simpleParallel", "latentTask"],
+      "tree": {
+        "root": "par",
+        "nodes": {
+          "par": { "type": "SimpleParallel", "main": "m", "background": "bg", "finishMode": "Immediate" },
+          "m": { "type": "LatentTask", "duration": 1 },
+          "bg": { "type": "LatentTask" }
+        }
+      },
+      "stimulus": ["start", "tick"],
+      "expected": { "updates": [
+        ["search:root", "par.activate", "m.activate", "bg.activate"]
+      ]}
+    },
+    {
+      "id": "S10-parallel-immediate",
+      "title": "Immediate finish mode: the main task finishing aborts the background; the parallel takes the main result",
+      "statements": ["S10"],
+      "requires": ["simpleParallel", "latentTask", "timeAdvance"],
+      "tree": {
+        "root": "par",
+        "nodes": {
+          "par": { "type": "SimpleParallel", "main": "m", "background": "bg", "finishMode": "Immediate" },
+          "m": { "type": "LatentTask", "duration": 1 },
+          "bg": { "type": "LatentTask" }
+        }
+      },
+      "stimulus": ["start", "tick", "advance:1", "tick"],
+      "expected": { "updates": [
+        ["search:root", "par.activate", "m.activate", "bg.activate"],
+        ["m.finish:Success"],
+        ["search:par", "bg.abort", "bg.finish:Aborted", "par.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S11-parallel-delayed",
+      "title": "Delayed finish mode: the background finishes naturally; the parallel completes afterwards with the main result",
+      "statements": ["S11"],
+      "requires": ["simpleParallel", "latentTask", "timeAdvance"],
+      "tree": {
+        "root": "par",
+        "nodes": {
+          "par": { "type": "SimpleParallel", "main": "m", "background": "bg", "finishMode": "Delayed" },
+          "m": { "type": "LatentTask", "duration": 1 },
+          "bg": { "type": "LatentTask", "duration": 3 }
+        }
+      },
+      "stimulus": ["start", "tick", "advance:1", "tick", "advance:2", "tick"],
+      "expected": { "updates": [
+        ["search:root", "par.activate", "m.activate", "bg.activate"],
+        ["m.finish:Success"],
+        ["search:par"],
+        ["bg.finish:Success"],
+        ["search:par", "par.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S13-parallel-abort-both-children",
+      "title": "Aborting a SimpleParallel aborts both children (order between them: S50's open item)",
+      "statements": ["S13"],
+      "requires": ["selector", "instantTask", "latentTask", "simpleParallel", "blackboardDecorator", "observerAbort.lowerPriority"],
+      "tree": {
+        "root": "sel",
+        "nodes": {
+          "sel": { "type": "Selector", "children": ["g", "par"] },
+          "g": { "type": "BlackboardDecorator", "child": "t", "key": "K", "query": { "op": "eq", "value": 1 }, "abort": "LowerPriority" },
+          "t": { "type": "InstantTask", "result": "Success" },
+          "par": { "type": "SimpleParallel", "main": "m", "background": "bg", "finishMode": "Immediate" },
+          "m": { "type": "LatentTask" },
+          "bg": { "type": "LatentTask" }
+        }
+      },
+      "blackboard": { "K": 0 },
+      "stimulus": ["start", "tick", "write:K=1", "tick"],
+      "expected": { "updates": [
+        ["search:root", "sel.activate", "g.fail", "par.activate", "m.activate", "bg.activate"],
+        ["bb.write:K=1", "g.observe", "g.pass"],
+        ["m.abort", "m.finish:Aborted", "bg.abort", "bg.finish:Aborted", "search:root", "g.pass", "t.activate", "t.finish:Success", "sel.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S14-parallel-background-finishes-early",
+      "title": "The background finishing while the main task runs has no effect on the parallel",
+      "statements": ["S14"],
+      "requires": ["simpleParallel", "latentTask", "timeAdvance"],
+      "tree": {
+        "root": "par",
+        "nodes": {
+          "par": { "type": "SimpleParallel", "main": "m", "background": "bg", "finishMode": "Immediate" },
+          "m": { "type": "LatentTask", "duration": 3 },
+          "bg": { "type": "LatentTask", "duration": 1 }
+        }
+      },
+      "stimulus": ["start", "tick", "advance:1", "tick", "advance:2", "tick"],
+      "expected": { "updates": [
+        ["search:root", "par.activate", "m.activate", "bg.activate"],
+        ["bg.finish:Success"],
+        [],
+        ["m.finish:Success"],
+        ["search:par", "par.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S50-latent-aborts-ordered",
+      "title": "[V] A branch switch waits for all in-flight latent aborts; ordering between them (sandbox S50)",
+      "statements": ["S50"],
+      "requires": ["selector", "instantTask", "latentTask", "simpleParallel", "blackboardDecorator", "observerAbort.lowerPriority", "timeAdvance", "verify:S50"],
+      "tree": {
+        "root": "sel",
+        "nodes": {
+          "sel": { "type": "Selector", "children": ["g", "par"] },
+          "g": { "type": "BlackboardDecorator", "child": "t", "key": "K", "query": { "op": "eq", "value": 1 }, "abort": "LowerPriority" },
+          "t": { "type": "InstantTask", "result": "Success" },
+          "par": { "type": "SimpleParallel", "main": "m", "background": "bg", "finishMode": "Immediate" },
+          "m": { "type": "LatentTask", "abortDelay": 1 },
+          "bg": { "type": "LatentTask", "abortDelay": 1 }
+        }
+      },
+      "blackboard": { "K": 0 },
+      "stimulus": ["start", "tick", "write:K=1", "tick", "advance:1", "tick"],
+      "expected": { "updates": [
+        ["search:root", "sel.activate", "g.fail", "par.activate", "m.activate", "bg.activate"],
+        ["bb.write:K=1", "g.observe", "g.pass"],
+        ["m.abort", "bg.abort"],
+        ["m.finish:Aborted", "bg.finish:Aborted"],
+        ["search:root", "g.pass", "t.activate", "t.finish:Success", "sel.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S58-unregister-branch-on-exit",
+      "title": "UnregisterBranchOnExit: decorators below the composite stop observing once flow leaves it",
+      "statements": ["S58"],
+      "requires": ["selector", "sequence", "latentTask", "blackboardDecorator", "observerAbort.self", "unregisterBranchOnExit"],
+      "tree": {
+        "root": "sel",
+        "nodes": {
+          "sel": { "type": "Selector", "children": ["g0", "c"] },
+          "g0": { "type": "BlackboardDecorator", "child": "sel2", "key": "K", "query": { "op": "eq", "value": 0 } },
+          "sel2": { "type": "Sequence", "children": ["g"], "unregisterBranchOnExit": true },
+          "g": { "type": "BlackboardDecorator", "child": "w", "key": "K", "query": "IsSet", "abort": "Self" },
+          "w": { "type": "LatentTask" },
+          "c": { "type": "LatentTask" }
+        }
+      },
+      "blackboard": { "K": 0 },
+      "stimulus": ["start", "tick", "write:K=2", "start", "tick", "clear:K", "tick"],
+      "expected": { "updates": [
+        ["search:root", "sel.activate", "g0.pass", "sel2.activate", "g.pass", "w.activate"],
+        ["bb.write:K=2"],
+        ["search:root", "g0.fail", "w.abort", "w.finish:Aborted", "c.activate"],
+        ["bb.clear:K"],
+        []
+      ]}
+    }
+  ]
+}

@@ -1,0 +1,370 @@
+{
+  "scenarios": [
+    {
+      "id": "S15-two-guards-and",
+      "title": "Multiple decorators on one node all pass: the branch is entered",
+      "statements": ["S15"],
+      "requires": ["selector", "instantTask", "blackboardDecorator"],
+      "tree": {
+        "root": "sel",
+        "nodes": {
+          "sel": { "type": "Selector", "children": ["g1", "b"] },
+          "g1": { "type": "BlackboardDecorator", "child": "g2", "key": "K", "query": { "op": "eq", "value": 0 } },
+          "g2": { "type": "BlackboardDecorator", "child": "a", "key": "K", "query": "IsSet" },
+          "a": { "type": "InstantTask", "result": "Success" },
+          "b": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "blackboard": { "K": 0 },
+      "stimulus": ["start", "tick"],
+      "expected": { "updates": [
+        ["search:root", "sel.activate", "g1.pass", "g2.pass", "a.activate", "a.finish:Success", "sel.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S16-guard-fail-skips-branch",
+      "title": "A failing decorator at entry means the branch is not entered; the selector moves on",
+      "statements": ["S16"],
+      "requires": ["selector", "instantTask", "blackboardDecorator"],
+      "tree": {
+        "root": "sel",
+        "nodes": {
+          "sel": { "type": "Selector", "children": ["g", "b"] },
+          "g": { "type": "BlackboardDecorator", "child": "a", "key": "K", "query": { "op": "eq", "value": 0 } },
+          "a": { "type": "InstantTask", "result": "Success" },
+          "b": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "blackboard": { "K": 1 },
+      "stimulus": ["start", "tick"],
+      "expected": { "updates": [
+        ["search:root", "sel.activate", "g.fail", "b.activate", "b.finish:Success", "sel.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S17-abort-none-checked-at-entry",
+      "title": "AbortMode.None: the condition is checked only at branch entry",
+      "statements": ["S17"],
+      "requires": ["sequence", "latentTask", "instantTask", "blackboardDecorator"],
+      "tree": {
+        "root": "seq",
+        "nodes": {
+          "seq": { "type": "Sequence", "children": ["g", "b"] },
+          "g": { "type": "BlackboardDecorator", "child": "a", "key": "K", "query": { "op": "eq", "value": 0 } },
+          "a": { "type": "LatentTask" },
+          "b": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "blackboard": { "K": 0 },
+      "stimulus": ["start", "tick", "write:K=1", "complete:a:Success", "tick"],
+      "expected": { "updates": [
+        ["search:root", "seq.activate", "g.pass", "a.activate"],
+        ["bb.write:K=1"],
+        ["a.finish:Success"],
+        ["search:seq", "b.activate", "b.finish:Success", "seq.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S18-self-abort",
+      "title": "AbortMode.Self: the condition turning false aborts the running branch",
+      "statements": ["S18"],
+      "requires": ["sequence", "latentTask", "blackboardDecorator", "observerAbort.self"],
+      "tree": {
+        "root": "seq",
+        "nodes": {
+          "seq": { "type": "Sequence", "children": ["g", "b"] },
+          "g": { "type": "BlackboardDecorator", "child": "a", "key": "K", "query": { "op": "eq", "value": 0 }, "abort": "Self" },
+          "a": { "type": "LatentTask" },
+          "b": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "blackboard": { "K": 0 },
+      "stimulus": ["start", "tick", "write:K=1", "tick"],
+      "expected": { "updates": [
+        ["search:root", "seq.activate", "g.pass", "a.activate"],
+        ["bb.write:K=1", "g.observe", "g.fail"],
+        ["a.abort", "a.finish:Aborted", "search:seq", "seq.complete:Failure"]
+      ]}
+    },
+    {
+      "id": "S19-lower-priority-abort",
+      "title": "AbortMode.LowerPriority: the guard's result flipping to passing aborts lower-priority execution and re-searches from the root",
+      "statements": ["S19"],
+      "requires": ["selector", "latentTask", "instantTask", "blackboardDecorator", "observerAbort.lowerPriority"],
+      "tree": {
+        "root": "sel",
+        "nodes": {
+          "sel": { "type": "Selector", "children": ["g", "w"] },
+          "g": { "type": "BlackboardDecorator", "child": "t1", "key": "K", "query": { "op": "eq", "value": 1 }, "abort": "LowerPriority" },
+          "t1": { "type": "InstantTask", "result": "Success" },
+          "w": { "type": "LatentTask" }
+        }
+      },
+      "blackboard": { "K": 0 },
+      "stimulus": ["start", "tick", "write:K=1", "tick"],
+      "expected": { "updates": [
+        ["search:root", "sel.activate", "g.fail", "w.activate"],
+        ["bb.write:K=1", "g.observe", "g.pass"],
+        ["w.abort", "w.finish:Aborted", "search:root", "g.pass", "t1.activate", "t1.finish:Success", "sel.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S20-both-abort",
+      "title": "AbortMode.Both behaves as Self and LowerPriority at once",
+      "statements": ["S20"],
+      "requires": ["selector", "latentTask", "blackboardDecorator", "observerAbort.both"],
+      "tree": {
+        "root": "sel",
+        "nodes": {
+          "sel": { "type": "Selector", "children": ["g", "w2"] },
+          "g": { "type": "BlackboardDecorator", "child": "w1", "key": "K", "query": { "op": "eq", "value": 1 }, "abort": "Both" },
+          "w1": { "type": "LatentTask" },
+          "w2": { "type": "LatentTask" }
+        }
+      },
+      "blackboard": { "K": 0 },
+      "stimulus": ["start", "tick", "write:K=1", "tick", "write:K=0", "tick"],
+      "expected": { "updates": [
+        ["search:root", "sel.activate", "g.fail", "w2.activate"],
+        ["bb.write:K=1", "g.observe", "g.pass"],
+        ["w2.abort", "w2.finish:Aborted", "search:root", "g.pass", "w1.activate"],
+        ["bb.write:K=0", "g.observe", "g.fail"],
+        ["w1.abort", "w1.finish:Aborted", "search:sel", "w2.activate"]
+      ]}
+    },
+    {
+      "id": "S21-multi-observer-coalesced",
+      "title": "One write hitting two observers: both re-evaluate in registration order; a single root search follows",
+      "statements": ["S21"],
+      "requires": ["selector", "latentTask", "instantTask", "blackboardDecorator", "observerAbort.lowerPriority"],
+      "tree": {
+        "root": "sel",
+        "nodes": {
+          "sel": { "type": "Selector", "children": ["g1", "g2", "w"] },
+          "g1": { "type": "BlackboardDecorator", "child": "t1", "key": "K", "query": { "op": "eq", "value": 1 }, "abort": "LowerPriority" },
+          "t1": { "type": "InstantTask", "result": "Success" },
+          "g2": { "type": "BlackboardDecorator", "child": "t2", "key": "K", "query": { "op": "eq", "value": 1 }, "abort": "LowerPriority" },
+          "t2": { "type": "InstantTask", "result": "Success" },
+          "w": { "type": "LatentTask" }
+        }
+      },
+      "blackboard": { "K": 0 },
+      "stimulus": ["start", "tick", "write:K=1", "tick"],
+      "expected": { "updates": [
+        ["search:root", "sel.activate", "g1.fail", "g2.fail", "w.activate"],
+        ["bb.write:K=1", "g1.observe", "g1.pass", "g2.observe", "g2.pass"],
+        ["w.abort", "w.finish:Aborted", "search:root", "g1.pass", "t1.activate", "t1.finish:Success", "sel.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S22-cooldown-window",
+      "title": "Cooldown starts when the branch is left; re-entry inside the window is blocked, after it is allowed",
+      "statements": ["S22"],
+      "requires": ["selector", "instantTask", "cooldown", "timeAdvance"],
+      "tree": {
+        "root": "sel",
+        "nodes": {
+          "sel": { "type": "Selector", "children": ["cd", "c"] },
+          "cd": { "type": "CooldownDecorator", "child": "a", "seconds": 2 },
+          "a": { "type": "InstantTask", "result": "Success" },
+          "c": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "stimulus": ["start", "tick", "start", "tick", "advance:2", "start", "tick"],
+      "expected": { "updates": [
+        ["search:root", "sel.activate", "cd.pass", "a.activate", "a.finish:Success", "sel.complete:Success"],
+        ["search:root", "sel.activate", "cd.fail", "c.activate", "c.finish:Success", "sel.complete:Success"],
+        ["search:root", "sel.activate", "cd.pass", "a.activate", "a.finish:Success", "sel.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S23-loop-finite-failure-passthrough",
+      "title": "Finite loop re-activates a failing child in the next update; after the last iteration the result passes through",
+      "statements": ["S23"],
+      "requires": ["selector", "instantTask", "loop"],
+      "tree": {
+        "root": "sel",
+        "nodes": {
+          "sel": { "type": "Selector", "children": ["loop", "c"] },
+          "loop": { "type": "LoopDecorator", "child": "a", "mode": "Finite", "count": 2 },
+          "a": { "type": "InstantTask", "result": "Failure" },
+          "c": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "stimulus": ["start", "tick", "tick"],
+      "expected": { "updates": [
+        ["search:root", "sel.activate", "loop.pass", "a.activate", "a.finish:Failure"],
+        ["a.activate", "a.finish:Failure", "c.activate", "c.finish:Success", "sel.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S23-loop-infinite-timeout",
+      "title": "Infinite loop with a timeout stops once the timeout elapsed since the first activation",
+      "statements": ["S23"],
+      "requires": ["selector", "instantTask", "loop", "timeAdvance"],
+      "tree": {
+        "root": "sel",
+        "nodes": {
+          "sel": { "type": "Selector", "children": ["loop", "c"] },
+          "loop": { "type": "LoopDecorator", "child": "a", "mode": "Infinite", "timeout": 1 },
+          "a": { "type": "InstantTask", "result": "Success" },
+          "c": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "stimulus": ["start", "tick", "tick", "advance:1", "tick"],
+      "expected": { "updates": [
+        ["search:root", "sel.activate", "loop.pass", "a.activate", "a.finish:Success"],
+        ["a.activate", "a.finish:Success"],
+        ["a.activate", "a.finish:Success", "sel.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S24-time-limit-fails",
+      "title": "Time limit: the running branch is stopped and fails when the limit expires",
+      "statements": ["S24"],
+      "requires": ["sequence", "latentTask", "timeLimit", "timeAdvance"],
+      "tree": {
+        "root": "seq",
+        "nodes": {
+          "seq": { "type": "Sequence", "children": ["tl", "b"] },
+          "tl": { "type": "TimeLimitDecorator", "child": "w", "seconds": 2 },
+          "w": { "type": "LatentTask" },
+          "b": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "stimulus": ["start", "tick", "advance:1", "advance:1", "tick"],
+      "expected": { "updates": [
+        ["search:root", "seq.activate", "tl.pass", "w.activate"],
+        ["w.abort", "w.finish:Aborted", "search:seq", "seq.complete:Failure"]
+      ]}
+    },
+    {
+      "id": "S25-force-success-converts",
+      "title": "ForceSuccess converts a child's Failure to Success at completion",
+      "statements": ["S25"],
+      "requires": ["selector", "instantTask", "forceResult"],
+      "tree": {
+        "root": "sel",
+        "nodes": {
+          "sel": { "type": "Selector", "children": ["fs", "c"] },
+          "fs": { "type": "ForceResultDecorator", "child": "a", "result": "Success" },
+          "a": { "type": "InstantTask", "result": "Failure" },
+          "c": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "stimulus": ["start", "tick"],
+      "expected": { "updates": [
+        ["search:root", "sel.activate", "fs.pass", "a.activate", "a.finish:Failure", "sel.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S25-force-success-not-on-abort",
+      "title": "ForceSuccess never converts an aborted execution: no success is recorded for the branch",
+      "statements": ["S25"],
+      "requires": ["selector", "latentTask", "instantTask", "forceResult", "blackboardDecorator", "observerAbort.self"],
+      "tree": {
+        "root": "sel",
+        "nodes": {
+          "sel": { "type": "Selector", "children": ["fs", "c"] },
+          "fs": { "type": "ForceResultDecorator", "child": "g", "result": "Success" },
+          "g": { "type": "BlackboardDecorator", "child": "w", "key": "K", "query": { "op": "eq", "value": 0 }, "abort": "Self" },
+          "w": { "type": "LatentTask" },
+          "c": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "blackboard": { "K": 0 },
+      "stimulus": ["start", "tick", "write:K=1", "tick"],
+      "expected": { "updates": [
+        ["search:root", "sel.activate", "fs.pass", "g.pass", "w.activate"],
+        ["bb.write:K=1", "g.observe", "g.fail"],
+        ["w.abort", "w.finish:Aborted", "search:sel", "c.activate", "c.finish:Success", "sel.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S26-decorator-order",
+      "title": "[V] Multiple decorators on one node evaluate in attachment order with short-circuit (sandbox S26)",
+      "statements": ["S26"],
+      "requires": ["selector", "instantTask", "blackboardDecorator", "verify:S26"],
+      "tree": {
+        "root": "sel",
+        "nodes": {
+          "sel": { "type": "Selector", "children": ["g1", "b"] },
+          "g1": { "type": "BlackboardDecorator", "child": "g2", "key": "K", "query": "IsSet" },
+          "g2": { "type": "BlackboardDecorator", "child": "a", "key": "J", "query": "IsSet" },
+          "a": { "type": "InstantTask", "result": "Success" },
+          "b": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "stimulus": ["start", "tick"],
+      "expected": { "updates": [
+        ["search:root", "sel.activate", "g1.fail", "b.activate", "b.finish:Success", "sel.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S54-notify-result-change",
+      "title": "NotifyMode.OnResultChange: a write that flips the condition result re-evaluates the guard and fires the Self abort",
+      "statements": ["S54"],
+      "requires": ["sequence", "latentTask", "blackboardDecorator", "observerAbort.self"],
+      "tree": {
+        "root": "seq",
+        "nodes": {
+          "seq": { "type": "Sequence", "children": ["g", "b"] },
+          "g": { "type": "BlackboardDecorator", "child": "w", "key": "K", "query": { "op": "eq", "value": 5 }, "abort": "Self" },
+          "w": { "type": "LatentTask" },
+          "b": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "blackboard": { "K": 5 },
+      "stimulus": ["start", "tick", "write:K=6", "tick"],
+      "expected": { "updates": [
+        ["search:root", "seq.activate", "g.pass", "w.activate"],
+        ["bb.write:K=6", "g.observe", "g.fail"],
+        ["w.abort", "w.finish:Aborted", "search:seq", "seq.complete:Failure"]
+      ]}
+    },
+    {
+      "id": "S54-notify-no-op-write",
+      "title": "A write that does not change the value notifies nobody and triggers nothing",
+      "statements": ["S54", "S37"],
+      "requires": ["sequence", "latentTask", "blackboardDecorator", "observerAbort.self"],
+      "tree": {
+        "root": "seq",
+        "nodes": {
+          "seq": { "type": "Sequence", "children": ["g", "b"] },
+          "g": { "type": "BlackboardDecorator", "child": "w", "key": "K", "query": { "op": "eq", "value": 5 }, "abort": "Self" },
+          "w": { "type": "LatentTask" },
+          "b": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "blackboard": { "K": 5 },
+      "stimulus": ["start", "tick", "write:K=5", "tick"],
+      "expected": { "updates": [
+        ["search:root", "seq.activate", "g.pass", "w.activate"],
+        ["bb.write:K=5"],
+        []
+      ]}
+    },
+    {
+      "id": "S54-notify-value-change",
+      "title": "NotifyMode.OnValueChange: any notifying write re-evaluates the guard even when the result is unchanged",
+      "statements": ["S54"],
+      "requires": ["sequence", "latentTask", "blackboardDecorator", "observerAbort.self"],
+      "tree": {
+        "root": "seq",
+        "nodes": {
+          "seq": { "type": "Sequence", "children": ["g", "b"] },
+          "g": { "type": "BlackboardDecorator", "child": "w", "key": "K", "query": { "op": "gt", "value": 3 }, "notify": "OnValueChange", "abort": "Self" },
+          "w": { "type": "LatentTask" },
+          "b": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "blackboard": { "K": 5 },
+      "stimulus": ["start", "tick", "write:K=6", "tick"],
+      "expected": { "updates": [
+        ["search:root", "seq.activate", "g.pass", "w.activate"],
+        ["bb.write:K=6", "g.observe", "g.pass"],
+        []
+      ]}
+    }
+  ]
+}

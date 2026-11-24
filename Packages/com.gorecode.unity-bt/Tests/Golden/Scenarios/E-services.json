@@ -1,0 +1,113 @@
+{
+  "scenarios": [
+    {
+      "id": "S32-service-on-task",
+      "title": "A service attached to a task is active while the task's branch is executed and ticks at its interval",
+      "statements": ["S32"],
+      "requires": ["sequence", "latentTask", "service", "timeAdvance"],
+      "tree": {
+        "root": "seq",
+        "nodes": {
+          "seq": { "type": "Sequence", "children": ["w"] },
+          "w": { "type": "LatentTask", "duration": 2, "services": ["s"] },
+          "s": { "type": "Service", "interval": 0.5 }
+        }
+      },
+      "stimulus": ["start", "tick", "advance:0.5", "advance:0.5", "advance:0.5", "advance:0.5", "tick"],
+      "expected": { "updates": [
+        ["search:root", "seq.activate", "s.activate", "w.activate"],
+        ["s.tick"],
+        ["s.tick"],
+        ["s.tick"],
+        ["w.finish:Success"],
+        ["search:seq", "s.deactivate", "seq.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S33-service-restart-timer-on",
+      "title": "Restart Timer on Each Activation: re-activation starts a full new interval",
+      "statements": ["S33"],
+      "requires": ["selector", "sequence", "latentTask", "instantTask", "service", "blackboardDecorator", "observerAbort.self", "timeAdvance"],
+      "tree": {
+        "root": "sel",
+        "nodes": {
+          "sel": { "type": "Selector", "children": ["g", "c"] },
+          "g": { "type": "BlackboardDecorator", "child": "seq1", "key": "K", "query": { "op": "eq", "value": 0 }, "abort": "Self" },
+          "seq1": { "type": "Sequence", "children": ["a"], "services": ["s"] },
+          "s": { "type": "Service", "interval": 1, "restartTimerOnEachActivation": true },
+          "a": { "type": "LatentTask", "duration": 1.5 },
+          "c": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "blackboard": { "K": 0 },
+      "stimulus": ["start", "tick", "advance:0.6", "write:K=1", "tick", "write:K=0", "start", "tick", "advance:0.4", "advance:0.6", "advance:0.6", "advance:0.3", "tick"],
+      "expected": { "updates": [
+        ["search:root", "sel.activate", "g.pass", "seq1.activate", "s.activate", "a.activate"],
+        ["bb.write:K=1", "g.observe", "g.fail"],
+        ["a.abort", "a.finish:Aborted", "s.deactivate", "search:sel", "c.activate", "c.finish:Success", "sel.complete:Success"],
+        ["bb.write:K=0"],
+        ["search:root", "sel.activate", "g.pass", "seq1.activate", "s.activate", "a.activate"],
+        [],
+        ["s.tick"],
+        ["a.finish:Success"],
+        ["search:seq1", "s.deactivate", "seq1.complete:Success", "sel.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S33-service-restart-timer-off",
+      "title": "Without Restart Timer on Each Activation the service keeps its leftover interval time",
+      "statements": ["S33"],
+      "requires": ["selector", "sequence", "latentTask", "instantTask", "service", "blackboardDecorator", "observerAbort.self", "timeAdvance"],
+      "tree": {
+        "root": "sel",
+        "nodes": {
+          "sel": { "type": "Selector", "children": ["g", "c"] },
+          "g": { "type": "BlackboardDecorator", "child": "seq1", "key": "K", "query": { "op": "eq", "value": 0 }, "abort": "Self" },
+          "seq1": { "type": "Sequence", "children": ["a"], "services": ["s"] },
+          "s": { "type": "Service", "interval": 1, "restartTimerOnEachActivation": false },
+          "a": { "type": "LatentTask", "duration": 1.5 },
+          "c": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "blackboard": { "K": 0 },
+      "stimulus": ["start", "tick", "advance:0.6", "write:K=1", "tick", "write:K=0", "start", "tick", "advance:0.4", "advance:0.6", "advance:0.6", "advance:0.3", "tick"],
+      "expected": { "updates": [
+        ["search:root", "sel.activate", "g.pass", "seq1.activate", "s.activate", "a.activate"],
+        ["bb.write:K=1", "g.observe", "g.fail"],
+        ["a.abort", "a.finish:Aborted", "s.deactivate", "search:sel", "c.activate", "c.finish:Success", "sel.complete:Success"],
+        ["bb.write:K=0"],
+        ["search:root", "sel.activate", "g.pass", "seq1.activate", "s.activate", "a.activate"],
+        ["s.tick"],
+        [],
+        ["s.tick", "a.finish:Success"],
+        ["search:seq1", "s.deactivate", "seq1.complete:Success", "sel.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S53-service-continuous-on-research",
+      "title": "[V] A re-search that re-selects the active path neither re-activates services nor resets their timers (sandbox S53)",
+      "statements": ["S53"],
+      "requires": ["selector", "sequence", "latentTask", "service", "blackboardDecorator", "observerAbort.lowerPriority", "restartPolicy", "timeAdvance", "verify:S53"],
+      "tree": {
+        "root": "sel",
+        "nodes": {
+          "sel": { "type": "Selector", "children": ["seq1", "g2"] },
+          "seq1": { "type": "Sequence", "children": ["w"], "services": ["s"] },
+          "s": { "type": "Service", "interval": 1 },
+          "w": { "type": "LatentTask", "restartPolicy": "KeepRunning" },
+          "g2": { "type": "BlackboardDecorator", "child": "c", "key": "K", "query": { "op": "eq", "value": 1 }, "abort": "LowerPriority" },
+          "c": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "blackboard": { "K": 0 },
+      "stimulus": ["start", "tick", "write:K=1", "tick", "advance:1", "tick"],
+      "expected": { "updates": [
+        ["search:root", "sel.activate", "seq1.activate", "s.activate", "w.activate"],
+        ["bb.write:K=1", "g2.observe", "g2.pass"],
+        ["search:root", "search:discard"],
+        ["s.tick"],
+        []
+      ]}
+    }
+  ]
+}

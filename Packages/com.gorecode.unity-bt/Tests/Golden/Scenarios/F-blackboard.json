@@ -1,0 +1,47 @@
+{
+  "scenarios": [
+    {
+      "id": "S34-authored-default-read",
+      "title": "A key with an authored default is read at that value before any write",
+      "statements": ["S34"],
+      "requires": ["selector", "instantTask", "blackboard", "blackboardDecorator"],
+      "tree": {
+        "root": "sel",
+        "nodes": {
+          "sel": { "type": "Selector", "children": ["g", "b"] },
+          "g": { "type": "BlackboardDecorator", "child": "a", "key": "K", "query": { "op": "eq", "value": 5 } },
+          "a": { "type": "InstantTask", "result": "Success" },
+          "b": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "blackboard": { "K": 5 },
+      "stimulus": ["start", "tick"],
+      "expected": { "updates": [
+        ["search:root", "sel.activate", "g.pass", "a.activate", "a.finish:Success", "sel.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S35-S37-set-and-clear-notify",
+      "title": "Single notification kind: writing and clearing a set key both notify observers; clearing an unset key notifies nobody",
+      "statements": ["S35", "S37"],
+      "requires": ["selector", "latentTask", "instantTask", "blackboard", "blackboardDecorator", "observerAbort.lowerPriority"],
+      "tree": {
+        "root": "sel",
+        "nodes": {
+          "sel": { "type": "Selector", "children": ["g", "w"] },
+          "g": { "type": "BlackboardDecorator", "child": "a", "key": "K", "query": "IsSet", "abort": "LowerPriority" },
+          "a": { "type": "InstantTask", "result": "Success" },
+          "w": { "type": "LatentTask" }
+        }
+      },
+      "stimulus": ["start", "tick", "clear:K", "write:K=1", "clear:K", "tick"],
+      "expected": { "updates": [
+        ["search:root", "sel.activate", "g.fail", "w.activate"],
+        ["bb.clear:K"],
+        ["bb.write:K=1", "g.observe", "g.pass"],
+        ["bb.clear:K", "g.observe", "g.fail"],
+        ["w.abort", "w.finish:Aborted", "search:root", "g.fail", "w.activate"]
+      ]}
+    }
+  ]
+}

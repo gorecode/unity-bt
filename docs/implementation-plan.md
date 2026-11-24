@@ -114,7 +114,12 @@ and the analyzer that enforces it.
 ### Phase 0 gate (go/no-go — all measurable)
 - [ ] P1: toy works on 6.6; ≤ 1 day of adapter-scope fixes to rebuild on 6.7 beta
 - [ ] R2: spec sign-offs (human + second agent) recorded; coverage table complete
-- [ ] R3: donor decision recorded (done)
+- [x] R3: donor decision recorded (done)
+- [x] P3: harness green on trivial trees (30+ scenarios passing on the naive
+  reference runtime); scenario format covers every traceable R2 statement
+  (coverage enforced by `Scenarios_CoverEveryTraceableSpecStatement`); 15
+  scenario classes enumerated in `docs/r7-sandbox-plan.md`; format documented
+  in `docs/golden-format.md`
 - [ ] R4/P5: 5 consecutive agent changes, zero human intervention beyond final gate
 - [ ] R5/P4: harness detects injected 24 B/tick leak; baselines recorded
 - [ ] R6: both CI legs green; Unity license activation procedure documented & tested

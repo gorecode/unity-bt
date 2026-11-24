@@ -1,0 +1,184 @@
+{
+  "scenarios": [
+    {
+      "id": "S39-subtree-runs-inline",
+      "title": "A subtree task runs its nested tree as part of the parent; the nested root result maps to the task result",
+      "statements": ["S39"],
+      "requires": ["sequence", "instantTask", "subtree"],
+      "tree": {
+        "root": "seq",
+        "nodes": {
+          "seq": { "type": "Sequence", "children": ["sub", "b"] },
+          "sub": { "type": "SubtreeTask", "tree": {
+            "root": "inner",
+            "nodes": {
+              "inner": { "type": "Sequence", "children": ["x"] },
+              "x": { "type": "InstantTask", "result": "Success" }
+            }
+          } },
+          "b": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "stimulus": ["start", "tick"],
+      "expected": { "updates": [
+        ["search:root", "seq.activate", "sub.activate", "sub/inner.activate", "sub/x.activate", "sub/x.finish:Success", "sub/inner.complete:Success", "sub.finish:Success", "b.activate", "b.finish:Success", "seq.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S40-dynamic-subtree-injected",
+      "title": "A dynamic subtree task runs the subtree injected at runtime by tag",
+      "statements": ["S40"],
+      "requires": ["sequence", "instantTask", "dynamicSubtree"],
+      "trees": {
+        "patrolA": {
+          "root": "inner",
+          "nodes": {
+            "inner": { "type": "Sequence", "children": ["x"] },
+            "x": { "type": "InstantTask", "result": "Success" }
+          }
+        }
+      },
+      "tree": {
+        "root": "seq",
+        "nodes": {
+          "seq": { "type": "Sequence", "children": ["dyn", "b"] },
+          "dyn": { "type": "DynamicSubtreeTask", "injectionTag": "patrol" },
+          "b": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "stimulus": ["inject:patrol:patrolA", "start", "tick"],
+      "expected": { "updates": [
+        ["search:root", "seq.activate", "dyn.activate", "patrolA/inner.activate", "patrolA/x.activate", "patrolA/x.finish:Success", "patrolA/inner.complete:Success", "dyn.finish:Success", "b.activate", "b.finish:Success", "seq.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S40-dynamic-subtree-swap-while-running",
+      "title": "Injecting a new subtree into the running dynamic task aborts the current subtree and starts the new one",
+      "statements": ["S40"],
+      "requires": ["sequence", "latentTask", "instantTask", "dynamicSubtree"],
+      "trees": {
+        "idleTree": {
+          "root": "inner",
+          "nodes": {
+            "inner": { "type": "Sequence", "children": ["w"] },
+            "w": { "type": "LatentTask" }
+          }
+        },
+        "patrolA": {
+          "root": "inner",
+          "nodes": {
+            "inner": { "type": "Sequence", "children": ["x"] },
+            "x": { "type": "InstantTask", "result": "Success" }
+          }
+        }
+      },
+      "tree": {
+        "root": "seq",
+        "nodes": {
+          "seq": { "type": "Sequence", "children": ["dyn", "b"] },
+          "dyn": { "type": "DynamicSubtreeTask", "injectionTag": "patrol", "defaultTree": "idleTree" },
+          "b": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "stimulus": ["start", "tick", "inject:patrol:patrolA", "tick"],
+      "expected": { "updates": [
+        ["search:root", "seq.activate", "dyn.activate", "idleTree/inner.activate", "idleTree/w.activate"],
+        ["idleTree/w.abort", "idleTree/w.finish:Aborted", "patrolA/x.activate", "patrolA/x.finish:Success", "patrolA/inner.complete:Success", "dyn.finish:Success", "b.activate", "b.finish:Success", "seq.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S41-stop-aborts-everything",
+      "title": "Stopping the runner aborts everything; no further transitions follow",
+      "statements": ["S41"],
+      "requires": ["sequence", "latentTask", "stop"],
+      "tree": {
+        "root": "seq",
+        "nodes": {
+          "seq": { "type": "Sequence", "children": ["w"] },
+          "w": { "type": "LatentTask" }
+        }
+      },
+      "stimulus": ["start", "tick", "stop", "tick"],
+      "expected": { "updates": [
+        ["search:root", "seq.activate", "w.activate"],
+        ["w.abort", "w.finish:Aborted"],
+        []
+      ]}
+    },
+    {
+      "id": "S47-root-decorators-of-subtree",
+      "title": "A subtree's root decorators act like decorators on the subtree task in the parent tree",
+      "statements": ["S47"],
+      "requires": ["sequence", "latentTask", "subtree", "blackboardDecorator", "observerAbort.self"],
+      "tree": {
+        "root": "seq",
+        "nodes": {
+          "seq": { "type": "Sequence", "children": ["sub"] },
+          "sub": { "type": "SubtreeTask", "rootDecorators": {
+            "rg": { "type": "BlackboardDecorator", "key": "K", "query": "IsSet", "abort": "Self" }
+          }, "tree": {
+            "root": "inner",
+            "nodes": {
+              "inner": { "type": "Sequence", "children": ["w"] },
+              "w": { "type": "LatentTask" }
+            }
+          } }
+        }
+      },
+      "blackboard": { "K": 1 },
+      "stimulus": ["start", "tick", "clear:K", "tick"],
+      "expected": { "updates": [
+        ["search:root", "seq.activate", "sub#rg.pass", "sub.activate", "sub/inner.activate", "sub/w.activate"],
+        ["bb.clear:K", "sub#rg.observe", "sub#rg.fail"],
+        ["sub/w.abort", "sub/w.finish:Aborted", "search:seq", "seq.complete:Failure"]
+      ]}
+    },
+    {
+      "id": "S59-subtree-shares-blackboard",
+      "title": "A subtree runs on the runner's blackboard: its writes are visible to the parent tree",
+      "statements": ["S59"],
+      "requires": ["sequence", "instantTask", "subtree", "blackboard", "blackboardDecorator"],
+      "tree": {
+        "root": "seq",
+        "nodes": {
+          "seq": { "type": "Sequence", "children": ["sub", "g"] },
+          "sub": { "type": "SubtreeTask", "tree": {
+            "root": "inner",
+            "nodes": {
+              "inner": { "type": "Sequence", "children": ["x"] },
+              "x": { "type": "InstantTask", "result": "Success", "writes": { "K": 1 } }
+            }
+          } },
+          "g": { "type": "BlackboardDecorator", "child": "c", "key": "K", "query": { "op": "eq", "value": 1 } },
+          "c": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "stimulus": ["start", "tick"],
+      "expected": { "updates": [
+        ["search:root", "seq.activate", "sub.activate", "sub/inner.activate", "sub/x.activate", "bb.write:K=1", "sub/x.finish:Success", "sub/inner.complete:Success", "sub.finish:Success", "g.pass", "c.activate", "c.finish:Success", "seq.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S62-idle-but-armed",
+      "title": "When no branch is executable the runner goes idle but its LowerPriority observers stay armed and restart execution",
+      "statements": ["S62"],
+      "requires": ["selector", "instantTask", "blackboard", "blackboardDecorator", "observerAbort.lowerPriority"],
+      "tree": {
+        "root": "sel",
+        "nodes": {
+          "sel": { "type": "Selector", "children": ["g", "g2"] },
+          "g": { "type": "BlackboardDecorator", "child": "a", "key": "K", "query": "IsSet", "abort": "LowerPriority" },
+          "a": { "type": "InstantTask", "result": "Success" },
+          "g2": { "type": "BlackboardDecorator", "child": "c", "key": "K", "query": "IsSet", "abort": "LowerPriority" },
+          "c": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "stimulus": ["start", "tick", "write:K=1", "tick"],
+      "expected": { "updates": [
+        ["search:root", "sel.activate", "g.fail", "g2.fail", "sel.complete:Failure"],
+        ["bb.write:K=1", "g.observe", "g.pass", "g2.observe", "g2.pass"],
+        ["search:root", "sel.activate", "g.pass", "a.activate", "a.finish:Success", "sel.complete:Success"]
+      ]}
+    }
+  ]
+}

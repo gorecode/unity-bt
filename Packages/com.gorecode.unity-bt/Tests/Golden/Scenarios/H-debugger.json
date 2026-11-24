@@ -1,0 +1,45 @@
+{
+  "scenarios": [
+    {
+      "id": "S42-trace-sufficient-for-replay",
+      "title": "Replaying a recorded trace reproduces the original transition sequence exactly",
+      "statements": ["S42"],
+      "requires": ["sequence", "instantTask", "latentTask", "debugger.replay"],
+      "tree": {
+        "root": "seq",
+        "nodes": {
+          "seq": { "type": "Sequence", "children": ["a", "w", "b"] },
+          "a": { "type": "InstantTask", "result": "Success", "writes": { "K": 1 } },
+          "w": { "type": "LatentTask" },
+          "b": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "stimulus": ["start", "tick", "complete:w:Success", "tick"],
+      "expected": { "updates": [
+        ["search:root", "seq.activate", "a.activate", "bb.write:K=1", "a.finish:Success", "w.activate"],
+        ["w.finish:Success"],
+        ["search:seq", "b.activate", "b.finish:Success", "seq.complete:Success"]
+      ]}
+    },
+    {
+      "id": "S43-breakpoint-pauses-before-activation",
+      "title": "A breakpoint pauses execution before the node activates; step runs exactly one node",
+      "statements": ["S43"],
+      "requires": ["sequence", "instantTask", "debugger.breakpoints"],
+      "tree": {
+        "root": "seq",
+        "nodes": {
+          "seq": { "type": "Sequence", "children": ["a", "b"] },
+          "a": { "type": "InstantTask", "result": "Success" },
+          "b": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "stimulus": ["breakpoint:a", "start", "tick", "step", "resume"],
+      "expected": { "updates": [
+        ["search:root", "seq.activate"],
+        ["a.activate", "a.finish:Success"],
+        ["b.activate", "b.finish:Success", "seq.complete:Success"]
+      ]}
+    }
+  ]
+}
