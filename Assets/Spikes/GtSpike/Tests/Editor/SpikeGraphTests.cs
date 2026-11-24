@@ -9,25 +9,14 @@ using UnityEngine;
 namespace Gorecode.Bt.Spikes.GtSpike.Tests
 {
     // P1 spike: proves GTK authoring + serialization round-trips headlessly.
-    // The graphs it creates are deleted again; nothing is kept under TestArtifacts.
+    // The graphs it creates stay in TestArtifacts (git-ignored): GTK keeps in-memory
+    // graph objects for imported graphs, and deleting the files while such an object
+    // holds a subgraph node makes it throw on every later domain reload.
     public class SpikeGraphTests
     {
         const string k_ArtifactsDir = "Assets/Spikes/GtSpike/TestArtifacts";
         const string k_SubGraphPath = k_ArtifactsDir + "/SubGraph.gtspike";
         const string k_MainGraphPath = k_ArtifactsDir + "/MainGraph.gtspike";
-
-        [TearDown]
-        public void DeleteArtifacts()
-        {
-            AssetDatabase.DeleteAsset(k_MainGraphPath);
-            AssetDatabase.DeleteAsset(k_SubGraphPath);
-            if (Directory.Exists(k_ArtifactsDir))
-            {
-                AssetDatabase.DeleteAsset(k_ArtifactsDir);
-            }
-
-            AssetDatabase.Refresh();
-        }
 
         [Test]
         public void GraphToolkit_SpikeAuthoringRoundTrips()

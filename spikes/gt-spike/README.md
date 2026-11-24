@@ -19,10 +19,8 @@ Unity-compiled spike code (this repo's dev project): `Assets/Spikes/GtSpike/`
 
 Menu items: `Assets/Create/spikes/GT Spike Graph`, `spikes/Open GT Spike Graph
 (probe)`, `spikes/Probe GTK importers`. Findings and API notes: `docs/gt-notes.md`.
-The round-trip test deletes the graphs it creates, so the two probe menus — which
-open `TestArtifacts/MainGraph.gtspike` — need that asset recreated first (create
-a spike graph from the menu item and add nodes, or temporarily disable the test's
-`TearDown`).
+The round-trip test leaves its graphs in `Assets/Spikes/GtSpike/TestArtifacts/`
+(git-ignored), which the two probe menus open.
 
 ## What the spike proved
 

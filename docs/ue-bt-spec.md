@@ -249,18 +249,18 @@ Decisions (v1.0):
   [src: BehaviorTreeComponent.cpp:1246-1252, 2156-2160].)* Arming: an LP
   observer is registered only once a search has **reached** its branch and
   found it failing (or after leaving it); branches a search never reached are
-  not armed *(src: BTCompositeNode.cpp:227-250, 287-292, 297-315].)*
+  not armed *(src: BTCompositeNode.cpp:227-250, 287-292, 297-315.)*
   *Stimulus:* branch1(guard on key K, LP) failed at entry, branch2 running; K
   flips so branch1's guard now passes → *Trace:* next update: search at the
   parent; guard re-checked; branch2's task abort + Finish(Aborted); branch1's
   task executes. If the guarded branch no longer passes and the search's only
   find lies beyond the requested range, the search is invalid and rolled
   back: the running task is left untouched *(src:
-  BehaviorTreeComponent.cpp:2156-2160, 2181-2186]*.
+  BehaviorTreeComponent.cpp:2156-2160, 2181-2186).*
 - **S20 [D]** — `AbortMode.Both` = Self + LowerPriority simultaneously: the
   observer is registered while its branch executes (armed on activation), when
   the branch fails at entry, and after the branch is left. *(src:
-  BTCompositeNode.cpp:235-248, 281-292, 307-311].)*
+  BTCompositeNode.cpp:235-248, 281-292, 307-311.)*
   *(covered by S18 + S19 stimuli combined)*
 - **S21 [K]** — Observers notified by one write each queue a request; the
   request whose search start has the highest priority is processed and the
@@ -303,9 +303,15 @@ Decisions (v1.0):
 - **S24 [K]** — TimeLimit: when the limit expires while the branch executes,
   the branch is stopped and **fails** (Failure delivered to the parent); the
   timer resets to the full window every time the node regains focus (each new
-  relevance period). *(src-verified [src: BTDecorator_TimeLimit.cpp:13-87].)*
-  *Stimulus:* limit 2s, branch re-entered after an abort at t=1.8s → *Trace:*
-  full new 2s window before Failure.
+  relevance period). *(src-verified [src:
+  BTDecorator_TimeLimit.cpp:13-87].)*
+  *Stimulus:* limit 2s; the branch is left at t=1.5s (a LowerPriority guard on
+  the other branch fires) and entered again → *Trace:* the new window ends
+  2s after re-entry.
+  *Residual [V]:* a restart that re-selects the same running task is presumed
+  **not** to re-arm the limit — the decorator never loses relevance, so its
+  queued removal and re-registration cancel *(src:
+  BehaviorTreeComponent.cpp:2056-2062).*; sandbox-confirm.
 - **S25 [K]** — ForceSuccess converts Failed→Succeeded at completion, **and
   also the Failed result a Self (observer) abort delivers to the parent**: a
   Self abort is processed as a regular deactivation carrying Failed, so the
@@ -570,6 +576,7 @@ carries a `verify:Sxx` capability so it stays skipped):
 - S14 — whether a background that finishes is re-selected while the main task
   still runs
 - S21 — UE observer notification order (sampling only)
+- S24 — whether a restart that re-selects the same running task re-arms the limit
 - S33 — service callback ordering vs child execution
 - S36 — write/completion interleaving within one update
 - S50 — ordering between simultaneous latent aborts
@@ -590,7 +597,7 @@ carries a `verify:Sxx` capability so it stays skipped):
   assignment via InjectionTag, no key observation).
 - Added: S46–S50, S53–S54, S58–S60, S62. IDs retired by folding: S51→S32,
   S52→S33, S55→S37, S56→S24, S57→S23, S61→S25.
-- Erratum queued for research notes (§7): OnBecomeRelevant/OnCeaseRelevant are
+- Erratum queued for research notes (§7): the engine's node-relevance callbacks are
   node-relevance callbacks, not blackboard "key observers" — the wording that
   produced the original S35/S37 modeling error.
 - Delta pass (same reviewer, post-revision): approved with changes; the seven

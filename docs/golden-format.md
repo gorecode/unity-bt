@@ -100,7 +100,7 @@ other step opens a segment only if it emitted events.
 | `bb.write:K=value` / `bb.clear:K` | Blackboard mutation (S42) |
 | `search:root` | A root search (start, restart, or the re-request after exhaustion in looped mode) |
 | `search:id` | A search at composite `id`: the continuation after a child's result, or an observer-triggered search limited to one of its branches |
-| `search:discard` | A search was rolled back because it selected a running `KeepRunning` task (S49) |
+| `search:discard` | A search was rolled back: it selected a running `KeepRunning` task (S49), or the task it found lies beyond the requested range (S19) |
 
 Nested-tree nodes are addressed `subtreeId/nodeId`; injected root decorators as
 `subtreeId#decoratorId`.
@@ -123,7 +123,8 @@ implements exactly them.
    *Mapping rule for differential comparison:* UE decides a composite's result
    during its search (2106-2116) and records it before the abort; this trace
    emits the completion after the abort. Compare node-level results, not the
-   position of completion markers relative to abort markers.
+   position of completion markers relative to abort markers. After a slow
+   abort the completion lands in the update that applies the pending outcome.
 3. **Requests are not merged.** Several pending requests → the one with the
    highest-priority search start is processed; the others are skipped, but a
    skipped request widens the processed search's range (1256-1281) — S08, S21.
@@ -146,7 +147,9 @@ implements exactly them.
    notification evaluates the condition. A failing result asks the parent to
    continue with a failed child; a passing result asks for a search limited to
    the decorated branch — and with `OnValueChange` also restarts an executing
-   branch. No previous result is stored.
+   branch. A pass that arrives while the same observer's stop request is still
+   waiting turns that stop into a restart (1002, 1018-1022). No previous result
+   is stored.
 8. **Discard:** a search that selects a running `KeepRunning` task is rolled
    back (2162-2186); the search events it already produced stay in the trace.
 9. **Finish** (585-613): when the root composite ends with any result, every
@@ -156,7 +159,15 @@ implements exactly them.
     is aborting; the tree keeps its state. When the abort completes, the
     outcome computed before it is applied without a new search; a request that
     arrived during the abort discards that outcome and is searched instead,
-    with its range limit removed — S29, S50.
+    with its range limit removed — S29, S50. When the pending outcome is "the
+    tree finished", requests arriving during the abort are dropped
+    (1173-1178).
+11. **Restart** (2056-2062; `BTCompositeNode.cpp` 603): a restart ignores a
+    pending loop repetition (the loop starts over) and leaves a time limit
+    running when the restart re-selects a task already under it; the limit is
+    re-armed only for a new relevance period (`BTDecorator_TimeLimit.cpp`
+    42-47) — S23, S24. Search ranges are widened, never tightened
+    (1409-1416).
 
 Not modeled by the naive runtime (unexercised; extend before a scenario needs
 them): a restart passing through a running nested composite deactivates and

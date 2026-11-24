@@ -42,6 +42,8 @@ namespace Gorecode.Bt.Tests.Golden
             public string Type;
             public N Parent;
             public int Prio;
+            /// <summary>Number of nodes in this node's subtree; Prio + Size is the first priority after it.</summary>
+            public int Size = 1;
             public St State = St.Idle;
         }
 
@@ -60,6 +62,8 @@ namespace Gorecode.Bt.Tests.Golden
             public JToken QueryValue;
             public double Seconds, Timeout, LastExit = -1e9, StartedAt;
             public int Count, Remaining, TimerId = -1;
+            /// <summary>True while a time limit is armed for the current relevance period.</summary>
+            public bool LimitRelevant;
         }
 
         sealed class Tsk : N
@@ -79,6 +83,8 @@ namespace Gorecode.Bt.Tests.Golden
             public string Result;
             /// <summary>Exclusive upper bound (pre-order priority) on the task the search may select.</summary>
             public int RangeEnd = k_Unbounded;
+            /// <summary>The observer whose evaluation produced this request, if any.</summary>
+            public Dec Source;
         }
 
         sealed class Completion
@@ -116,12 +122,14 @@ namespace Gorecode.Bt.Tests.Golden
         Req m_RequestAfterAbort;
         SearchResult m_Stored;
         Tsk m_ActiveTask;
+        Tsk m_AbortingTask;
         bool m_Looped;
         bool m_AbortInProgress;
         double m_Clock;
         int m_NextTimerId;
 
-        public bool HasPendingRequests => m_Pending != null || (m_Stored != null && !m_AbortInProgress);
+        /// <summary>Work is pending while a request waits, a task is still aborting, or an outcome waits to be applied.</summary>
+        public bool HasPendingRequests => m_Pending != null || m_AbortInProgress || m_Stored != null || m_RequestAfterAbort != null;
 
         // ---------------------------------------------------------------- loading
 
@@ -135,6 +143,7 @@ namespace Gorecode.Bt.Tests.Golden
             m_RequestAfterAbort = null;
             m_Stored = null;
             m_ActiveTask = null;
+            m_AbortingTask = null;
             m_AbortInProgress = false;
             m_Clock = 0;
             m_NextTimerId = 0;
@@ -154,6 +163,25 @@ namespace Gorecode.Bt.Tests.Golden
             m_RootComp = m_Root as Comp;
             var prio = 0;
             AssignPrio(m_Root, ref prio);
+            Measure(m_Root);
+        }
+
+        static int Measure(N n)
+        {
+            n.Size = 1;
+            if (n is Comp c)
+            {
+                foreach (var child in c.Children)
+                {
+                    n.Size += Measure(child);
+                }
+            }
+            else if (n is Dec d)
+            {
+                n.Size += Measure(d.Child);
+            }
+
+            return n.Size;
         }
 
         N Build(string id, JObject def, JObject nodes, N parent)
@@ -384,7 +412,7 @@ namespace Gorecode.Bt.Tests.Golden
                 // [src: BehaviorTreeComponent.cpp:2200-2212].
                 var current = m_ActiveTask;
                 m_ActiveTask = null;
-                LeaveBranch(current);
+                LeaveBranch(current, sr.Task);
                 ResetActiveIndexes(current);
                 if (AbortTask(current, seg, false))
                 {
@@ -472,6 +500,7 @@ namespace Gorecode.Bt.Tests.Golden
             var idx = k_None;
             string last = null;
             var first = true;
+            var restart = req.Kind == ReqKind.Root;
             Enter(cur, seg, sr);
 
             while (true)
@@ -483,7 +512,7 @@ namespace Gorecode.Bt.Tests.Golden
                     // The finished child's result is processed at its parent.
                     last = OnLeaveLink(cur, req.ChildIdx, req.Result, sr);
                     idx = req.ChildIdx;
-                    next = NextChild(cur, idx, last, out repeated);
+                    next = NextChild(cur, idx, last, restart, out repeated);
                 }
                 else if (first && req.Kind == ReqKind.BranchStart)
                 {
@@ -492,7 +521,7 @@ namespace Gorecode.Bt.Tests.Golden
                 }
                 else
                 {
-                    next = NextChild(cur, idx, last, out repeated);
+                    next = NextChild(cur, idx, last, restart, out repeated);
                 }
 
                 first = false;
@@ -550,9 +579,16 @@ namespace Gorecode.Bt.Tests.Golden
             return sr;
         }
 
-        int NextChild(Comp cur, int lastChildIdx, string lastResult, out bool repeated)
+        int NextChild(Comp cur, int lastChildIdx, string lastResult, bool restart, out bool repeated)
         {
             repeated = false;
+            if (restart)
+            {
+                // A restart ignores a pending loop repetition; the loop starts over
+                // [src: BTCompositeNode.cpp:603].
+                cur.RepeatChild = k_None;
+            }
+
             if (cur.RepeatChild != k_None)
             {
                 repeated = true;
@@ -626,10 +662,18 @@ namespace Gorecode.Bt.Tests.Golden
 
                         break;
                     case "TimeLimitDecorator":
-                        // The limit is re-armed every time the branch is entered (S24). It is
-                        // armed when the search's data is applied — after the abort of the
-                        // task the search replaces [src: BehaviorTreeComponent.cpp:2253-2254].
-                        sr.Deferred.Add(() => ArmTimeLimit(d));
+                        // Armed when the search's data is applied — after the abort of the
+                        // task the search replaces [src: BehaviorTreeComponent.cpp:2253-2254]
+                        // — and only for a new relevance period: a search that re-selects
+                        // a task already under this limit leaves the running timer alone
+                        // [src: BehaviorTreeComponent.cpp:2056-2062].
+                        sr.Deferred.Add(() =>
+                        {
+                            if (!d.LimitRelevant)
+                            {
+                                ArmTimeLimit(d);
+                            }
+                        });
                         break;
                     case "LoopDecorator":
                     {
@@ -697,8 +741,10 @@ namespace Gorecode.Bt.Tests.Golden
                     case "TimeLimitDecorator":
                     {
                         var savedTimer = d.TimerId;
+                        var savedRelevant = d.LimitRelevant;
                         Disarm(d);
-                        sr.Undo.Add(() => d.TimerId = savedTimer);
+                        d.LimitRelevant = false;
+                        sr.Undo.Add(() => { d.TimerId = savedTimer; d.LimitRelevant = savedRelevant; });
                         break;
                     }
 
@@ -782,10 +828,12 @@ namespace Gorecode.Bt.Tests.Golden
             t.TimerId = -1;
             if (!forceImmediate && t.AbortDelay > 0)
             {
+                m_AbortingTask = t;
                 AddTimer(m_Clock + t.AbortDelay, s =>
                 {
                     E(s, t.Id, "finish", "Aborted");
                     t.State = St.Idle;
+                    m_AbortingTask = null;
                     m_AbortInProgress = false;
                     if (m_RequestAfterAbort != null)
                     {
@@ -804,8 +852,8 @@ namespace Gorecode.Bt.Tests.Golden
             return false;
         }
 
-        /// <summary>Timed decorators on the abandoned branch stop with it (a time limit re-arms on re-entry, S24; a cooldown starts, S22).</summary>
-        void LeaveBranch(Tsk t)
+        /// <summary>Timed decorators on an abandoned branch stop with it (a time limit re-arms on its next relevance period, S24; a cooldown starts, S22).</summary>
+        void LeaveBranch(Tsk t, Tsk newTask)
         {
             for (var p = t.Parent; p != null; p = p.Parent)
             {
@@ -813,7 +861,12 @@ namespace Gorecode.Bt.Tests.Golden
                 {
                     if (d.Type == "TimeLimitDecorator")
                     {
-                        Disarm(d);
+                        // A limit that still encloses the new task keeps running.
+                        if (newTask == null || !IsUnder(d, newTask))
+                        {
+                            Disarm(d);
+                            d.LimitRelevant = false;
+                        }
                     }
                     else if (d.Type == "CooldownDecorator")
                     {
@@ -826,6 +879,7 @@ namespace Gorecode.Bt.Tests.Golden
         void ArmTimeLimit(Dec d)
         {
             Disarm(d);
+            d.LimitRelevant = true;
             var id = -1;
             id = AddTimer(m_Clock + d.Seconds, s =>
             {
@@ -857,6 +911,13 @@ namespace Gorecode.Bt.Tests.Golden
 
         void DoStop(List<string> seg)
         {
+            if (m_AbortingTask != null)
+            {
+                E(seg, m_AbortingTask.Id, "finish", "Aborted");
+                m_AbortingTask.State = St.Idle;
+                m_AbortingTask = null;
+            }
+
             if (m_ActiveTask != null)
             {
                 AbortTask(m_ActiveTask, seg, true);
@@ -903,25 +964,40 @@ namespace Gorecode.Bt.Tests.Golden
                 }
 
                 var executing = m_ActiveTask != null && IsUnder(d.Child, m_ActiveTask);
+                var branchIdx = LinkIndex(d);
                 if (!pass)
                 {
                     if (executing)
                     {
-                        Queue(new Req { Kind = ReqKind.Continue, Start = owner, ChildIdx = LinkIndex(d), Result = "Failure" });
+                        Queue(new Req { Kind = ReqKind.Continue, Start = owner, ChildIdx = branchIdx, Result = "Failure", Source = d });
                     }
                 }
-                else if (!executing || d.RestartWhenPassing)
+                else
                 {
-                    var branchIdx = LinkIndex(d);
-                    Queue(new Req
+                    // A pass re-requests the branch when it is not executing, when
+                    // OnValueChange says so, or when this observer's own stop request is
+                    // still waiting — the stop then turns into a restart
+                    // [src: BehaviorTreeComponent.cpp:1002, 1018-1022].
+                    var ownStopPending = m_Pending != null && m_Pending.Kind == ReqKind.Continue && m_Pending.Source == d;
+                    if (!executing || d.RestartWhenPassing || ownStopPending)
                     {
-                        Kind = ReqKind.BranchStart,
-                        Start = owner,
-                        ChildIdx = branchIdx,
-                        RangeEnd = branchIdx + 1 < owner.Children.Count ? owner.Children[branchIdx + 1].Prio : k_Unbounded,
-                    });
+                        Queue(new Req
+                        {
+                            Kind = ReqKind.BranchStart,
+                            Start = owner,
+                            ChildIdx = branchIdx,
+                            RangeEnd = RangeEndOf(owner, branchIdx),
+                            Source = d,
+                        });
+                    }
                 }
             }
+        }
+
+        /// <summary>Where the decorated branch ends: the next sibling, or the end of the owning composite's subtree.</summary>
+        static int RangeEndOf(Comp owner, int childIdx)
+        {
+            return childIdx + 1 < owner.Children.Count ? owner.Children[childIdx + 1].Prio : owner.Prio + owner.Size;
         }
 
         /// <summary>
@@ -935,9 +1011,16 @@ namespace Gorecode.Bt.Tests.Golden
             {
                 // Nothing is searched while a task is aborting; the request runs when the
                 // abort completes and the outcome computed before it is dropped
-                // [src: BehaviorTreeComponent.cpp:1432-1454].
+                // [src: BehaviorTreeComponent.cpp:1432-1454]. When that outcome is "the
+                // tree finished", the request is dropped instead
+                // [src: BehaviorTreeComponent.cpp:1173-1178].
                 if (m_Stored != null)
                 {
+                    if (m_Stored.Task == null)
+                    {
+                        return;
+                    }
+
                     Undo(m_Stored.Undo);
                     m_Stored = null;
                 }
@@ -954,6 +1037,13 @@ namespace Gorecode.Bt.Tests.Golden
             {
                 m_Pending.RangeEnd = req.RangeEnd == k_Unbounded ? k_Unbounded : Math.Max(m_Pending.RangeEnd, req.RangeEnd);
                 return;
+            }
+
+            // A request that replaces an older one inherits its range: ranges are widened,
+            // never tightened [src: BehaviorTreeComponent.cpp:1409-1416].
+            if (m_Pending != null)
+            {
+                req.RangeEnd = Math.Max(req.RangeEnd, m_Pending.RangeEnd);
             }
 
             m_Pending = req;

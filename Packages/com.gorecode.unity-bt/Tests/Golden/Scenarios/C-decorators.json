@@ -91,6 +91,29 @@
       ]}
     },
     {
+      "id": "S18-self-abort-cancelled-by-pass",
+      "title": "A Self guard that passes again before its stop request is served turns the stop into a restart of the branch",
+      "statements": ["S18", "S54"],
+      "requires": ["sequence", "latentTask", "blackboardDecorator", "observerAbort.self"],
+      "tree": {
+        "root": "seq",
+        "nodes": {
+          "seq": { "type": "Sequence", "children": ["g", "b"] },
+          "g": { "type": "BlackboardDecorator", "child": "a", "key": "K", "query": { "op": "eq", "value": 5 }, "abort": "Self" },
+          "a": { "type": "LatentTask" },
+          "b": { "type": "InstantTask", "result": "Success" }
+        }
+      },
+      "blackboard": { "K": 5 },
+      "stimulus": ["start", "tick", "write:K=6", "write:K=5", "tick", "settle"],
+      "expected": { "updates": [
+        ["search:root", "seq.activate", "g.pass", "a.activate"],
+        ["bb.write:K=6", "g.observe", "g.fail"],
+        ["bb.write:K=5", "g.observe", "g.pass"],
+        ["search:seq", "g.pass", "a.abort", "a.finish:Aborted", "a.activate"]
+      ]}
+    },
+    {
       "id": "S19-lower-priority-abort",
       "title": "AbortMode.LowerPriority: the guard's result flipping to passing runs a search limited to the decorated branch, aborting lower-priority execution",
       "statements": ["S19"],
@@ -275,9 +298,37 @@
     },
     {
       "id": "S24-time-limit-resets-on-reentry",
-      "title": "Time limit: the timer restarts from the full limit every time the branch is re-entered",
+      "title": "Time limit: after the branch is left and entered again, the timer starts over from the full limit",
       "statements": ["S24"],
-      "requires": ["sequence", "latentTask", "timeLimit", "timeAdvance"],
+      "requires": ["selector", "latentTask", "instantTask", "timeLimit", "timeAdvance", "blackboardDecorator", "observerAbort.lowerPriority"],
+      "tree": {
+        "root": "sel",
+        "nodes": {
+          "sel": { "type": "Selector", "children": ["g2", "tl"] },
+          "g2": { "type": "BlackboardDecorator", "child": "c", "key": "K", "query": { "op": "eq", "value": 1 }, "abort": "LowerPriority" },
+          "c": { "type": "InstantTask", "result": "Success" },
+          "tl": { "type": "TimeLimitDecorator", "child": "w", "seconds": 2 },
+          "w": { "type": "LatentTask" }
+        }
+      },
+      "blackboard": { "K": 0 },
+      "stimulus": ["start", "tick", "advance:1.5", "write:K=1", "tick", "tick", "write:K=0", "start", "tick", "advance:0.5", "tick", "advance:1.5", "tick"],
+      "expected": { "updates": [
+        ["search:root", "sel.activate", "g2.fail", "tl.pass", "w.activate"],
+        ["bb.write:K=1", "g2.observe", "g2.pass"],
+        ["search:sel", "g2.pass", "w.abort", "w.finish:Aborted", "c.activate", "c.finish:Success"],
+        ["search:sel", "sel.complete:Success"],
+        ["bb.write:K=0"],
+        ["search:root", "sel.activate", "g2.fail", "tl.pass", "w.activate"],
+        [],
+        ["search:sel", "w.abort", "w.finish:Aborted", "sel.complete:Failure"]
+      ]}
+    },
+    {
+      "id": "S24-time-limit-on-restart",
+      "title": "[V] A restart that re-selects the same running task does not re-arm the limit: the decorator never loses relevance (sandbox S24)",
+      "statements": ["S24"],
+      "requires": ["sequence", "latentTask", "timeLimit", "timeAdvance", "verify:S24"],
       "tree": {
         "root": "seq",
         "nodes": {
@@ -287,11 +338,10 @@
           "b": { "type": "InstantTask", "result": "Success" }
         }
       },
-      "stimulus": ["start", "tick", "advance:1.5", "start", "tick", "advance:0.5", "tick", "advance:1.5", "tick"],
+      "stimulus": ["start", "tick", "advance:1.5", "start", "tick", "advance:0.5", "tick"],
       "expected": { "updates": [
         ["search:root", "seq.activate", "tl.pass", "w.activate"],
         ["search:root", "tl.pass", "w.abort", "w.finish:Aborted", "w.activate"],
-        [],
         ["search:seq", "w.abort", "w.finish:Aborted", "seq.complete:Failure"]
       ]}
     },

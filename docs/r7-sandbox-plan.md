@@ -33,7 +33,7 @@ activations and deactivations, aborts, and the task executed.
 | 9 | Simple Parallel finish modes | Parallel with main/background of different durations; Immediate and Delayed; background finishing first | S09–S11, S14 | `S09-parallel-activates-both` … `S14-parallel-background-finishes-early` |
 | 10 | Cooldown | Cooldown-decorated branch; exit, re-enter inside and after the window | S22 | `S22-cooldown-window` |
 | 11 | Loop | Finite loop over a failing task; infinite loop with timeout | S23 | `S23-loop-finite-failure-passthrough`, `S23-loop-infinite-timeout` |
-| 12 | Time limit | Time-limited latent branch; let the limit expire; restart the tree before expiry and let the new window run | S24 | `S24-time-limit-fails`, `S24-time-limit-resets-on-reentry` |
+| 12 | Time limit | Time-limited latent branch; let the limit expire; leave the branch (a LowerPriority guard on the other branch fires) and re-enter it; then a tree restart that re-selects the same running task — does the limit re-arm? | S24 | `S24-time-limit-fails`, `S24-time-limit-resets-on-reentry`, `S24-time-limit-on-restart` |
 | 13 | Services | Service on a composite and on a task; interval ticks; restart-timer on/off; restart through an active service | S32, S33, S53 | `S32-service-on-task`, `S33-service-restart-timer-on/off`, `S53-service-continuous-on-research` |
 | 14 | Blackboard notifications | IsSet / comparison guards; set, clear, no-op write; both notify modes; a write that leaves the condition passing under each mode; a re-armed LP guard written again while its condition still passes; authored defaults | S34–S37, S54 | `S34-authored-default-read`, `S35-S37-set-and-clear-notify`, `S54-notify-*` |
 | 15 | Subtrees & isolation | Static subtree with root decorators; dynamic subtree injected and swapped while running; subtree writing the parent's key; two agents on one tree | S39, S40, S47, S59, S60 | `S39-subtree-runs-inline`, `S40-dynamic-subtree-*`, `S47-root-decorators-of-subtree`, `S59-subtree-shares-blackboard`, `S60-cross-agent-isolation` |
@@ -43,10 +43,10 @@ activations and deactivations, aborts, and the task executed.
 
 ## Statements still gated on these captures
 
-`verify:S05`, `verify:S08`, `verify:S14`, `verify:S33`, `verify:S50`, `verify:S53`
-keep their golden scenarios skipped until the corresponding trace confirms or
-refutes the presumption; the scenario is then edited to the observed trace and
-the tag removed.
+`verify:S05`, `verify:S08`, `verify:S14`, `verify:S24`, `verify:S33`, `verify:S50`,
+`verify:S53` keep their golden scenarios skipped until the corresponding trace
+confirms or refutes the presumption; the scenario is then edited to the observed
+trace and the tag removed.
 
 Items the engine source settled (see the spec's "Resolved from engine source"
 list) need a capture only as a differential cross-check in Phase 3. The ones
